@@ -1,4 +1,4 @@
-"""Sprint 2: Ball reconstruction, kinematics, dead-ball detection, and team control features.
+"""Sprint 2/3: Ball reconstruction, kinematics, dead-ball detection, and outcome-gated team features.
 
 All thresholds and weights are derived from football physics (metres, m/s, seconds)
 and full-match unlabeled structure -- never fitted against the public 5-minute GT.
@@ -13,12 +13,7 @@ HOME, AWAY = 0, 1
 
 def rolling_sum_1d(arr, half_win):
     """Centered rolling sum over [t - half_win, t + half_win] in O(N)."""
-    n = len(arr)
-    cs = np.concatenate(([0.0], np.cumsum(arr, dtype=np.float64)))
-    idx = np.arange(n)
-    lo = np.maximum(0, idx - half_win)
-    hi = np.minimum(n, idx + half_win + 1)
-    return cs[hi] - cs[lo]
+    return window_sum_1d(arr, half_win, half_win)
 
 
 def window_sum_1d(arr, back_win, fwd_win):
@@ -88,6 +83,56 @@ def compute_ball_speed(bx, by, pitch, fps):
         spd[1:-1][ok2] = s2[ok2]
 
     return np.clip(spd, 0.0, 45.0)
+
+
+def compute_touch_impulses(bx_i, by_i, d_H, d_A, dead_score, pitch, fps):
+    """Detect ball velocity impulses and validate 1-touch clearances / receptions via outcome gating."""
+    n = len(bx_i)
+    length, width = pitch
+    bx_m = bx_i.astype(np.float64) * length
+    by_m = by_i.astype(np.float64) * width
+
+    vx_pre = np.full(n, np.nan, dtype=np.float64)
+    vy_pre = np.full(n, np.nan, dtype=np.float64)
+    vx_post = np.full(n, np.nan, dtype=np.float64)
+    vy_post = np.full(n, np.nan, dtype=np.float64)
+
+    if n > 3:
+        ok3 = (~np.isnan(bx_m[3:])) & (~np.isnan(bx_m[:-3]))
+        vx_pre[3:][ok3] = (bx_m[3:][ok3] - bx_m[:-3][ok3]) * (fps / 3.0)
+        vy_pre[3:][ok3] = (by_m[3:][ok3] - by_m[:-3][ok3]) * (fps / 3.0)
+        vx_post[:-3][ok3] = (bx_m[3:][ok3] - bx_m[:-3][ok3]) * (fps / 3.0)
+        vy_post[:-3][ok3] = (by_m[3:][ok3] - by_m[:-3][ok3]) * (fps / 3.0)
+
+    valid_v = (~np.isnan(vx_pre)) & (~np.isnan(vx_post))
+    dv = np.zeros(n, dtype=np.float64)
+    dv[valid_v] = np.hypot(vx_post[valid_v] - vx_pre[valid_v],
+                           vy_post[valid_v] - vy_pre[valid_v])
+
+    min_d = np.minimum(d_H, d_A)
+    touch_any = rolling_sum_1d((valid_v & (dv > 3.5) & (min_d < 2.8)).astype(np.float64), 2) > 0
+
+    def _outcome_gate(d_own, d_opp):
+        cand = valid_v & (dv > 3.5) & (d_own < 2.3) & (d_own + 0.2 < d_opp)
+        gate = np.zeros(n, dtype=bool)
+        for t in np.flatnonzero(cand):
+            t_s, t_end = min(n, t + 5), min(n, t + 65)
+            if t_s >= t_end:
+                continue
+            own_later = np.sum((d_own[t_s:t_end] < 2.3) & (d_own[t_s:t_end] + 0.2 < d_opp[t_s:t_end])) >= 6
+            disp = 0.0
+            if not np.isnan(bx_m[t]):
+                vf = ~np.isnan(bx_m[t_s:t_end])
+                if np.any(vf):
+                    disp = float(np.max(np.hypot(bx_m[t_s:t_end][vf] - bx_m[t],
+                                                 by_m[t_s:t_end][vf] - by_m[t])))
+            if own_later or disp > 12.0 or float(np.mean(dead_score[t_s:t_end] > 1.0)) > 0.4:
+                gate[max(0, t - 2):min(n, t + 3)] = True
+        return gate
+
+    gate_H = _outcome_gate(d_H, d_A)
+    gate_A = _outcome_gate(d_A, d_H)
+    return touch_any, gate_H, gate_A
 
 
 def compute_player_activity(ps):
@@ -212,8 +257,6 @@ def find_set_piece_restarts(events, bx_clean, by_clean, b_spd, mps_fast, oob, px
         if w1 <= w0 + 10:
             continue
 
-        # Locate exact onset of the restart kick/throw:
-        # require dead-like state immediately before t, and active in-bounds ball motion AT t.
         best_t = None
         best_score = -1e9
         for t in range(w0, w1):
@@ -223,7 +266,6 @@ def find_set_piece_restarts(events, bx_clean, by_clean, b_spd, mps_fast, oob, px
             pre_dead = (~vis_all[pre0:t]) | oob[pre0:t] | (spd_all[pre0:t] < 1.8)
             pre_dead_frac = float(np.mean(pre_dead)) if t > pre0 else 0.0
 
-            # Immediate check right at [t, t+4]: ball must be visible, in bounds, and accelerating
             imm1 = min(n_frames, t + 4)
             imm_in = vis_all[t:imm1] & (~oob[t:imm1])
             if np.mean(imm_in) < 0.75:
@@ -242,7 +284,6 @@ def find_set_piece_restarts(events, bx_clean, by_clean, b_spd, mps_fast, oob, px
             post_live = vis_all[t:post1] & (~oob[t:post1]) & (spd_all[t:post1] > 3.2)
             post_live_frac = float(np.mean(post_live))
 
-            # Reward crisp acceleration step across t (slow before t -> fast at t)
             accel_step = np.clip((spd_at_t - pre_imm_spd) / 5.0, 0.0, 1.0)
             if pre_dead_frac >= 0.65 and post_live_frac >= 0.35:
                 sc = pre_dead_frac + 1.3 * post_live_frac + 0.5 * accel_step + 0.08 * min(spd_at_t, 12.0)
@@ -264,7 +305,6 @@ def find_set_piece_restarts(events, bx_clean, by_clean, b_spd, mps_fast, oob, px
         if best_t is None:
             continue
 
-        # Infer Throw-in team when Team == N/A
         if sp_team is None and "throw" in sp_type.lower():
             h_votes = 0.0
             a_votes = 0.0
@@ -296,12 +336,9 @@ def find_set_piece_restarts(events, bx_clean, by_clean, b_spd, mps_fast, oob, px
             if abs(h_votes - a_votes) > 1.0:
                 sp_team = HOME if h_votes > a_votes else AWAY
 
-        # Walk backward from best_t - 2 ONLY over the genuine dead/setup stretch,
-        # without marching 15s blindly into prior live play.
         back_limit = max(0, best_t - 15 * fps)
         dead_hint_start = best_t
 
-        # Anchor 1: contiguous dead setup immediately before best_t
         active_streak = 0
         for t in range(best_t - 2, back_limit - 1, -1):
             is_dead_setup = (not vis_all[t]) or oob[t] or (spd_all[t] < 1.5 and mps_fast[t] < 1.45)
@@ -313,13 +350,9 @@ def find_set_piece_restarts(events, bx_clean, by_clean, b_spd, mps_fast, oob, px
                 if active_streak >= 8:
                     break
 
-        # Anchor 2: if ball went out of bounds earlier in [best_t - 14s, best_t]
-        # (e.g., ball crossed endline -> GK walked to place it for Goal Kick),
-        # keep the span from the start of that OOB exit through best_t dead.
         oob_idxs = np.flatnonzero(oob[max(0, best_t - 14 * fps):best_t])
         if len(oob_idxs) >= 4:
             first_oob = max(0, best_t - 14 * fps) + int(oob_idxs[0])
-            # Walk slightly backward from first_oob if ball exited while visible/NaN
             dead_hint_start = min(dead_hint_start, first_oob)
 
         restarts.append((dead_hint_start, best_t, sp_team, sp_type))
@@ -328,7 +361,7 @@ def find_set_piece_restarts(events, bx_clean, by_clean, b_spd, mps_fast, oob, px
 
 
 def build_frame_evidence(data):
-    """Compute calibrated per-frame evidence for H vs A and Dead vs Alive."""
+    """Compute calibrated per-frame evidence and time-varying transition multipliers."""
     n = data["n_frames"]
     fps = data["fps"]
     pitch = data["pitch"]
@@ -357,6 +390,10 @@ def build_frame_evidence(data):
     p90_fast = rolling_nanmean_1d(p90_fill, half_win=12)
     p90_slow = rolling_nanmean_1d(p90_fill, half_win=30)
 
+    mps_ahead = np.empty(n, dtype=np.float64)
+    mps_ahead[:-25] = mps_fast[25:]
+    mps_ahead[-25:] = mps_fast[-1]
+
     # 3. Distance from ball to nearest Home and Away player
     vis_i = ~np.isnan(bx_i)
     vis_clean = ~np.isnan(bx_clean)
@@ -379,11 +416,9 @@ def build_frame_evidence(data):
     d_diff[has_both] = np.clip((d_A[has_both] - d_H[has_both]) / 1.4, -2.5, 2.5)
 
     w_prox = np.where(has_both, np.exp(-min_d / 1.7), 0.0)
-    # Dribbling (< 1.6 m) stays valid up to ~10 m/s; balls > 1.6 m away moving fast are in flight
     speed_thresh = np.where(min_d <= 1.6, 9.5, 6.0)
     w_speed = 1.0 / (1.0 + np.maximum(0.0, (b_spd_filled - speed_thresh) / 4.5) ** 2)
-    # Contested-ball damping (CHALLENGE.md): during 50/50 duels where both teams are close
-    # and equidistant to the ball, reduce turnover confidence so possession stays with holder.
+
     opp_d_safe = np.where(has_both, opp_d, 10.0)
     abs_diff_safe = np.where(has_both, np.abs(np.where(has_both, d_A, 0.0) - np.where(has_both, d_H, 0.0)), 10.0)
     w_contested = np.where(
@@ -396,7 +431,6 @@ def build_frame_evidence(data):
 
     close_H = has_both & (d_H < 2.1) & (d_H + 0.35 < d_A) & (b_spd_filled < 9.5)
     close_A = has_both & (d_A < 2.1) & (d_A + 0.35 < d_H) & (b_spd_filled < 9.5)
-    # Causal trailing confirmation [t-14, t+1]: prevents pulling turnovers ~10 frames early
     ctrl_H = window_sum_1d(close_H.astype(np.float64), back_win=14, fwd_win=1)
     ctrl_A = window_sum_1d(close_A.astype(np.float64), back_win=14, fwd_win=1)
     ctrl_bonus = np.clip((ctrl_H - ctrl_A) / 5.0, -1.8, 1.8) * w_contested
@@ -432,7 +466,7 @@ def build_frame_evidence(data):
     # 6. Dead-ball evidence dead_score (>0 favors D, <0 favors Alive)
     dead_score = np.full(n, -0.55, dtype=np.float64)
 
-    # 6a. Out-of-bounds ball (tight +/-3f window to avoid early boundary pull)
+    # 6a. Out-of-bounds ball
     oob = vis_clean & ((bx_clean < -0.004) | (bx_clean > 1.004) |
                        (by_clean < -0.004) | (by_clean > 1.004))
     oob_rate = rolling_sum_1d(oob.astype(np.float64), half_win=3) / 7.0
@@ -446,8 +480,6 @@ def build_frame_evidence(data):
     dead_score += 2.5 * np.clip(near_line_rate * 1.5, 0.0, 1.0)
 
     # 6b. Asymmetric collective player activity
-    # Avoid falsely triggering D when a player holds the ball at their feet inside pitch
-    # during live slow build-up (min_d < 1.5 m inside pitch, not near edge).
     in_pitch_feet = vis_clean & (~oob) & (min_d < 1.4) & (
         (bx_clean > 0.04) & (bx_clean < 0.96) & (by_clean > 0.04) & (by_clean < 0.96)
     )
@@ -459,14 +491,18 @@ def build_frame_evidence(data):
     act_weight = np.where(live_ball_inbounds, 0.25, np.where(in_pitch_feet & in_buildup_or_prog, 0.35, 0.85))
     dead_score += act_weight * slow_pos - fast_neg
 
-    # 6c. Sustained in-pitch stoppages (referee stoppage / injury / wall setup)
-    # Require players clearly stopped/walking (mps_slow < 1.25 and p90_slow < 1.85)
-    # AND sustained over a wider window (+/-1.0s) so 2s build-up pauses don't split possessions.
+    # 6c. Sustained in-pitch stoppages + Uncontested Slow Ball (S_ignored) + Deceleration Inflection
     slow_stop = vis_clean & (~oob) & (mps_slow < 1.25) & (p90_slow < 1.85) & (
         (b_spd_filled < 3.5) | (min_d > 3.5)
     )
     slow_stop_rate = rolling_sum_1d(slow_stop.astype(np.float64), half_win=25) / 51.0
     dead_score += 2.4 * np.clip((slow_stop_rate - 0.45) / 0.35, 0.0, 1.0)
+
+    # Uncontested slow ball & deceleration onset catch referee whistles promptly before slow_stop saturates
+    s_ignored = vis_clean & (~oob) & (b_spd_filled < 2.3) & (min_d > 3.5) & (mps_fast < 1.38)
+    s_decel = vis_clean & (~oob) & (b_spd_filled < 4.5) & (min_d > 5.5) & (mps_fast < 1.75) & (mps_ahead < 1.32)
+    s_ign_rate = rolling_sum_1d((s_ignored | s_decel).astype(np.float64), half_win=10) / 21.0
+    dead_score += 1.8 * np.clip(s_ign_rate * 1.5, 0.0, 1.0)
 
     # 6d. Long ball-NaN gaps (> 35 frames = 1.4 s) inside play halves
     ko2 = anchor_video_frame(GAMES[data["game"]]["kickoff_2nd"]) + 1
@@ -524,13 +560,14 @@ def build_frame_evidence(data):
         team_map, pitch, n, fps, goal_dead_windows
     )
     sp_restart_mask = np.zeros(n, dtype=bool)
+    sp_boost = np.zeros(n, dtype=bool)
     for dead_hint_start, t_restart, sp_team, sp_type in sp_restarts:
         if t_restart - dead_hint_start >= 20:
             dead_score[dead_hint_start:t_restart] = np.maximum(
                 dead_score[dead_hint_start:t_restart], 2.5
             )
             sp_restart_mask[max(0, dead_hint_start - 25):t_restart + 10] = True
-        # Keep alive for at least 3 seconds after a set piece restart (prevents immediate build-up split)
+        sp_boost[max(0, t_restart - 3):min(n, t_restart + 15)] = True
         post_end = min(n, t_restart + 75)
         dead_score[t_restart:post_end] = np.minimum(dead_score[t_restart:post_end], -2.0)
         if sp_team is not None:
@@ -541,9 +578,25 @@ def build_frame_evidence(data):
     h2_start = half_blocks[1][1]
     dead_score[h2_start:ko2] = 50.0
 
+    # 8. Time-varying turnover multipliers via Outcome-Gated touch impulses
+    touch_any, gate_H, gate_A = compute_touch_impulses(
+        bx_i, by_i, d_H, d_A, dead_score, pitch, fps
+    )
+    touch_or_sp = touch_any | sp_boost
+    mult_to_H = np.where(
+        gate_H | sp_boost, 0.78,
+        np.where(touch_or_sp, 0.90, np.where(has_both & (min_d < 2.0), 1.0, 1.22)),
+    )
+    mult_to_A = np.where(
+        gate_A | sp_boost, 0.78,
+        np.where(touch_or_sp, 0.90, np.where(has_both & (min_d < 2.0), 1.0, 1.22)),
+    )
+
     return {
         "team_score": team_score,
         "dead_score": dead_score,
+        "mult_to_H": mult_to_H,
+        "mult_to_A": mult_to_A,
         "vis_clean": vis_clean,
         "vis_interp": vis_i,
         "oob": oob,
