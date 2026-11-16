@@ -251,6 +251,12 @@ What the code fixes is structure:
 - The dead/alive head is ball-blind by design, so a quick restart during which the players never
   slow down is hard to see, and the start and end of a stoppage are placed from the players'
   behaviour rather than from the ball crossing a line.
+- The dead/alive head depends on player speeds computed from positions, so it depends on the
+  tracker not flickering. With frame-to-frame position jitter of 0.55 m added to a held-out
+  match (every player then appears to move at 5-7 m/s) it stops detecting stoppages: alive/dead
+  F1 falls from 0.95 to 0.74 and macroF1 to 0.45. The competition tracking shows no such jitter
+  (median collective speed 1.47 m/s, the same as clean tracking), but a tracker that flickers
+  would need its positions smoothed first.
 - The Smart Tagging is not used. It cannot be validated on other games because no other game
   has it, and the one validated route to it (adaptation) did not pay.
 - The corruption model is calibrated on unlabelled statistics and brackets the competition
