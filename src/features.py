@@ -109,6 +109,17 @@ def compute_touch_impulses(bx_i, by_i, d_H, d_A, dead_score, pitch, fps):
     dv[valid_v] = np.hypot(vx_post[valid_v] - vx_pre[valid_v],
                            vy_post[valid_v] - vy_pre[valid_v])
 
+    dtheta = np.zeros(n, dtype=np.float64)
+    sp_pre = np.hypot(vx_pre, vy_pre)
+    sp_post = np.hypot(vx_post, vy_post)
+    ok_ang = valid_v & (sp_pre > 2.0) & (sp_post > 2.0)
+    cos_th = np.clip(
+        (vx_pre[ok_ang] * vx_post[ok_ang] + vy_pre[ok_ang] * vy_post[ok_ang])
+        / (sp_pre[ok_ang] * sp_post[ok_ang]),
+        -1.0, 1.0,
+    )
+    dtheta[ok_ang] = np.degrees(np.arccos(cos_th))
+
     min_d = np.minimum(d_H, d_A)
     touch_any = rolling_sum_1d((valid_v & (dv > 3.5) & (min_d < 2.8)).astype(np.float64), 2) > 0
 
@@ -132,7 +143,7 @@ def compute_touch_impulses(bx_i, by_i, d_H, d_A, dead_score, pitch, fps):
 
     gate_H = _outcome_gate(d_H, d_A)
     gate_A = _outcome_gate(d_A, d_H)
-    return touch_any, gate_H, gate_A, dv
+    return touch_any, gate_H, gate_A, dv, dtheta
 
 
 def compute_player_activity(ps):
@@ -529,13 +540,31 @@ def build_frame_evidence(data):
                 post_edge = (bx_clean[b] < 0.03 or bx_clean[b] > 0.97 or
                              by_clean[b] < 0.03 or by_clean[b] > 0.97)
 
-            if gap_mps >= 1.72 and gap_p90 >= 2.75 and not (pre_edge and gap_len > 150):
+            if gap_mps >= 1.92 and gap_p90 >= 2.75 and not (pre_edge and gap_len > 150):
                 dead_score[a:b] -= 1.4
-            elif gap_mps < 1.38 or (pre_edge and gap_mps < 1.60) or (post_edge and gap_len > 150 and gap_mps < 1.55):
-                strength = 1.8 + np.clip((1.45 - gap_mps) * 2.5, 0.0, 2.2)
+            elif gap_mps < 1.50 or (pre_edge and gap_mps < 1.60) or (post_edge and gap_len > 150 and gap_mps < 1.55):
+                strength = 1.8 + np.clip((1.50 - gap_mps) * 2.5, 0.0, 2.2)
                 dead_score[a:b] += strength
+            elif gap_len >= 65 and gap_mps < 1.92:
+                # Tier-2 jogging reset: players slow down after an untagged foul/offside
+                mid = a + gap_len // 2
+                mps_1 = float(np.mean(mps_fill[a:mid]))
+                mps_2 = float(np.mean(mps_fill[mid:b]))
+                c1 = gap_p90 < 3.1
+                c2 = (mps_2 < mps_1) and (mps_2 < 1.60)
+                post_spd = b_spd_filled[b + 2:min(n, b + 18)]
+                c3 = (len(post_spd) > 0 and float(np.min(post_spd)) < 1.5) or (b < n and bool(oob[b]))
+                if int(c1) + int(c2) + int(c3) >= 2:
+                    dead_score[a:b] += 1.8
+                elif gap_mps >= 1.72 and gap_p90 >= 2.75:
+                    dead_score[a:b] -= 1.4
+                else:
+                    dead_score[a:b] += 0.3
             else:
-                dead_score[a:b] += 0.3
+                if gap_mps >= 1.72 and gap_p90 >= 2.75 and not (pre_edge and gap_len > 150):
+                    dead_score[a:b] -= 1.4
+                else:
+                    dead_score[a:b] += 0.3
 
     # 7. Smart Tagging GOALS celebrations & SET PIECES restarts
     goal_dead_windows = detect_goal_celebrations(events, bx_clean, mps_fast, p90_fast, n, fps)
@@ -578,11 +607,13 @@ def build_frame_evidence(data):
     h2_start = half_blocks[1][1]
     dead_score[h2_start:ko2] = 50.0
 
-    # 8. Time-varying turnover multipliers via Outcome-Gated touch impulses
-    touch_any, gate_H, gate_A, dv = compute_touch_impulses(
+    # 8. Time-varying turnover multipliers via Outcome-Gated touch impulses + Mid-Flight Pass Damping
+    touch_any, gate_H, gate_A, dv, dtheta = compute_touch_impulses(
         bx_i, by_i, d_H, d_A, dead_score, pitch, fps
     )
     touch_or_sp = touch_any | sp_boost
+    fast_pass = vis_i & (b_spd_filled > 7.0) & (min_d > 1.35) & (dtheta < 35.0) & (dv <= 4.5)
+
     mult_to_H = np.where(
         gate_H | sp_boost, 0.78,
         np.where(touch_or_sp, 0.90, np.where(has_both & (min_d < 2.0), 1.0, 1.22)),
@@ -591,6 +622,8 @@ def build_frame_evidence(data):
         gate_A | sp_boost, 0.78,
         np.where(touch_or_sp, 0.90, np.where(has_both & (min_d < 2.0), 1.0, 1.22)),
     )
+    mult_to_H = np.where(fast_pass, np.maximum(mult_to_H, 1.8), mult_to_H)
+    mult_to_A = np.where(fast_pass, np.maximum(mult_to_A, 1.8), mult_to_A)
 
     return {
         "team_score": team_score,
@@ -598,6 +631,7 @@ def build_frame_evidence(data):
         "mult_to_H": mult_to_H,
         "mult_to_A": mult_to_A,
         "dv": dv,
+        "dtheta": dtheta,
         "vis_clean": vis_clean,
         "vis_interp": vis_i,
         "oob": oob,

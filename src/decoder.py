@@ -160,6 +160,33 @@ def snap_transitions(codes, dv, d_h, d_a, oob, start_idx, end_idx, min_seg_len=1
     return out
 
 
+def filter_fast_sandwiches(codes, b_spd, dtheta, start_idx, end_idx,
+                           max_len=55, min_med_spd=7.0, max_entry_angle=30.0):
+    """Merge brief mid-flight sandwiched turnovers (H-A-H / A-H-A) without ball deflection."""
+    out = codes.copy()
+    changed = True
+    n_total = len(out)
+    while changed:
+        changed = False
+        seg = out[start_idx:end_idx]
+        if len(seg) == 0:
+            break
+        breaks = np.flatnonzero(seg[1:] != seg[:-1]) + 1
+        bounds = np.concatenate(([0], breaks, [len(seg)]))
+        for j in range(1, len(bounds) - 1):
+            a = start_idx + int(bounds[j])
+            b = start_idx + int(bounds[j + 1])
+            st = int(out[a])
+            if st in (H, A) and (b - a) < max_len and out[a - 1] == out[b] and out[a - 1] in (H, A):
+                med_bs = float(np.median(b_spd[a:b]))
+                entry_ang = float(np.max(dtheta[max(0, a - 3):min(n_total, a + 4)]))
+                if med_bs > min_med_spd and entry_ang < max_entry_angle:
+                    out[a:b] = out[a - 1]
+                    changed = True
+                    break
+    return out
+
+
 def decode_match(data, features, p_ha=54.0, p_ad=34.0, p_da=22.0):
     """Decode full 199,319 frames into H/A/D/X label array."""
     n = data["n_frames"]
@@ -168,6 +195,8 @@ def decode_match(data, features, p_ha=54.0, p_ad=34.0, p_da=22.0):
     mult_to_h = features["mult_to_H"]
     mult_to_a = features["mult_to_A"]
     dv = features["dv"]
+    dtheta = features["dtheta"]
+    b_spd = features["b_spd"]
     d_h = features["d_H"]
     d_a = features["d_A"]
     half_blocks = data["half_blocks"]
@@ -196,6 +225,7 @@ def decode_match(data, features, p_ha=54.0, p_ad=34.0, p_da=22.0):
         h1_seq, oob[h1_s:h1_e + 1], vis[h1_s:h1_e + 1], sp_mask[h1_s:h1_e + 1]
     )
     codes = snap_transitions(codes, dv, d_h, d_a, oob, h1_s, h1_e + 1)
+    codes = filter_fast_sandwiches(codes, b_spd, dtheta, h1_s, h1_e + 1)
 
     _, h2_s, h2_e = half_blocks[1]
     codes[h2_s:ko2] = D
@@ -207,5 +237,6 @@ def decode_match(data, features, p_ha=54.0, p_ad=34.0, p_da=22.0):
         h2_seq, oob[ko2:h2_e + 1], vis[ko2:h2_e + 1], sp_mask[ko2:h2_e + 1]
     )
     codes = snap_transitions(codes, dv, d_h, d_a, oob, ko2, h2_e + 1)
+    codes = filter_fast_sandwiches(codes, b_spd, dtheta, ko2, h2_e + 1)
 
     return LABEL_CHARS[codes], codes
