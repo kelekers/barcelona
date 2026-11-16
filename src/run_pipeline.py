@@ -21,6 +21,7 @@ from starter.baseline import write_submission  # noqa: E402
 from src.atd_io import load_match  # noqa: E402
 from src.decoder import A, D, H, X, decode_match  # noqa: E402
 from src.features import build_frame_evidence  # noqa: E402
+from src.learned_model import decode_match_learned  # noqa: E402
 
 
 def print_full_match_diagnostics(data, features, codes):
@@ -68,9 +69,11 @@ def main():
     parser.add_argument("--data-dir", default=None, help="Optional override for data directory")
     parser.add_argument("--out", default=os.path.join(ROOT, "evaluation", "results", "submission.csv"),
                         help="Output CSV path")
-    parser.add_argument("--p-ha", type=float, default=54.0, help="H<->A switch penalty")
-    parser.add_argument("--p-ad", type=float, default=34.0, help="Alive->Dead penalty")
-    parser.add_argument("--p-da", type=float, default=22.0, help="Dead->Alive penalty")
+    parser.add_argument("--mode", choices=("learned", "heuristic"), default="learned",
+                        help="Inference mode: 2-stage Metrica GBDT+PELT+MBR (learned) or heuristic Viterbi")
+    parser.add_argument("--p-ha", type=float, default=54.0, help="Heuristic H<->A switch penalty")
+    parser.add_argument("--p-ad", type=float, default=34.0, help="Heuristic Alive->Dead penalty")
+    parser.add_argument("--p-da", type=float, default=22.0, help="Heuristic Dead->Alive penalty")
     args = parser.parse_args()
 
     t0 = time.time()
@@ -80,8 +83,12 @@ def main():
     print("Loaded in {:.2f}s. Building physical & tactical features ...".format(t1 - t0))
     features = build_frame_evidence(data)
     t2 = time.time()
-    print("Features built in {:.2f}s. Running 3-state Viterbi decoder ...".format(t2 - t1))
-    labels, codes = decode_match(data, features, p_ha=args.p_ha, p_ad=args.p_ad, p_da=args.p_da)
+    if args.mode == "learned":
+        print("Features built in {:.2f}s. Running 2-stage Metrica GBDT + PELT + MBR decoder ...".format(t2 - t1))
+        labels, codes = decode_match_learned(data, features)
+    else:
+        print("Features built in {:.2f}s. Running 3-state heuristic Viterbi decoder ...".format(t2 - t1))
+        labels, codes = decode_match(data, features, p_ha=args.p_ha, p_ad=args.p_ad, p_da=args.p_da)
     t3 = time.time()
     print("Decoded in {:.2f}s (total {:.2f}s).".format(t3 - t2, t3 - t0))
 

@@ -476,19 +476,25 @@ def build_frame_evidence(data):
 
     # 6. Dead-ball evidence dead_score (>0 favors D, <0 favors Alive)
     dead_score = np.full(n, -0.55, dtype=np.float64)
+    # Also track ball/boundary physical shift for the learned model (independent of player kinematics)
+    phys_dead_shift = np.zeros(n, dtype=np.float64)
 
     # 6a. Out-of-bounds ball
     oob = vis_clean & ((bx_clean < -0.004) | (bx_clean > 1.004) |
                        (by_clean < -0.004) | (by_clean > 1.004))
     oob_rate = rolling_sum_1d(oob.astype(np.float64), half_win=3) / 7.0
-    dead_score += 4.2 * np.clip(oob_rate * 1.4, 0.0, 1.0)
+    oob_ev = np.clip(oob_rate * 1.4, 0.0, 1.0)
+    dead_score += 4.2 * oob_ev
+    phys_dead_shift += 5.5 * oob_ev
 
     # Near-sideline/endline stationary ball
     near_line_slow = vis_clean & (
         (bx_clean < 0.015) | (bx_clean > 0.985) | (by_clean < 0.015) | (by_clean > 0.985)
     ) & (b_spd_filled < 1.5) & (mps_fast < 1.50)
     near_line_rate = rolling_sum_1d(near_line_slow.astype(np.float64), half_win=10) / 21.0
-    dead_score += 2.5 * np.clip(near_line_rate * 1.5, 0.0, 1.0)
+    near_ev = np.clip(near_line_rate * 1.5, 0.0, 1.0)
+    dead_score += 2.5 * near_ev
+    phys_dead_shift += 3.0 * near_ev
 
     # 6b. Asymmetric collective player activity
     in_pitch_feet = vis_clean & (~oob) & (min_d < 1.4) & (
@@ -501,6 +507,7 @@ def build_frame_evidence(data):
     live_ball_inbounds = vis_clean & (~oob) & (b_spd_filled > 4.0) & (min_d < 3.5)
     act_weight = np.where(live_ball_inbounds, 0.25, np.where(in_pitch_feet & in_buildup_or_prog, 0.35, 0.85))
     dead_score += act_weight * slow_pos - fast_neg
+    phys_dead_shift += np.where(live_ball_inbounds, -2.0, np.where(in_pitch_feet & in_buildup_or_prog, -1.0, 0.0))
 
     # 6c. Sustained in-pitch stoppages + Uncontested Slow Ball (S_ignored) + Deceleration Inflection
     slow_stop = vis_clean & (~oob) & (mps_slow < 1.25) & (p90_slow < 1.85) & (
@@ -513,7 +520,9 @@ def build_frame_evidence(data):
     s_ignored = vis_clean & (~oob) & (b_spd_filled < 2.3) & (min_d > 3.5) & (mps_fast < 1.38)
     s_decel = vis_clean & (~oob) & (b_spd_filled < 4.5) & (min_d > 5.5) & (mps_fast < 1.75) & (mps_ahead < 1.32)
     s_ign_rate = rolling_sum_1d((s_ignored | s_decel).astype(np.float64), half_win=10) / 21.0
-    dead_score += 1.8 * np.clip(s_ign_rate * 1.5, 0.0, 1.0)
+    s_ign_ev = np.clip(s_ign_rate * 1.5, 0.0, 1.0)
+    dead_score += 1.8 * s_ign_ev
+    phys_dead_shift += 2.4 * s_ign_ev
 
     # 6d. Long ball-NaN gaps (> 35 frames = 1.4 s) inside play halves
     ko2 = anchor_video_frame(GAMES[data["game"]]["kickoff_2nd"]) + 1
@@ -527,6 +536,7 @@ def build_frame_evidence(data):
             gap_len = b - a
             if gap_len <= 35:
                 dead_score[a:b] -= 0.7
+                phys_dead_shift[a:b] -= 0.6
                 continue
 
             gap_mps = float(np.mean(mps_fill[a:b]))
@@ -539,6 +549,9 @@ def build_frame_evidence(data):
             if b < n and not np.isnan(bx_clean[b]):
                 post_edge = (bx_clean[b] < 0.03 or bx_clean[b] > 0.97 or
                              by_clean[b] < 0.03 or by_clean[b] > 0.97)
+
+            if pre_edge or (post_edge and gap_len > 120):
+                phys_dead_shift[a:b] += 1.6 if gap_len > 150 else 0.9
 
             if gap_mps >= 1.92 and gap_p90 >= 2.75 and not (pre_edge and gap_len > 150):
                 dead_score[a:b] -= 1.4
@@ -567,22 +580,33 @@ def build_frame_evidence(data):
                     dead_score[a:b] += 0.3
 
     # 7. Smart Tagging GOALS celebrations & SET PIECES restarts
+    sp_team_bias = np.zeros(n, dtype=np.float64)
+    sp_dead_floor = np.full(n, -1e9, dtype=np.float64)
+    sp_live_ceil = np.full(n, 1e9, dtype=np.float64)
+
     goal_dead_windows = detect_goal_celebrations(events, bx_clean, mps_fast, p90_fast, n, fps)
     for stop_start, t_ko, conceding_team in goal_dead_windows:
         dead_score[stop_start:t_ko] = np.maximum(dead_score[stop_start:t_ko], 5.5)
+        sp_dead_floor[stop_start:t_ko] = np.maximum(sp_dead_floor[stop_start:t_ko], 6.5)
         if conceding_team is not None:
             bias = 2.8 if conceding_team == HOME else -2.8
             team_score[t_ko:min(n, t_ko + 50)] += bias
+            sp_team_bias[t_ko:min(n, t_ko + 50)] += 4.0 if conceding_team == HOME else -4.0
             dead_score[t_ko:min(n, t_ko + 50)] = np.minimum(dead_score[t_ko:min(n, t_ko + 50)], -2.2)
+            sp_live_ceil[t_ko:min(n, t_ko + 50)] = np.minimum(sp_live_ceil[t_ko:min(n, t_ko + 50)], -3.5)
 
     for t_ko_ref in (half_blocks[0][1], ko2):
         dead_score[t_ko_ref:min(n, t_ko_ref + 50)] = np.minimum(
             dead_score[t_ko_ref:min(n, t_ko_ref + 50)], -2.5
         )
+        sp_live_ceil[t_ko_ref:min(n, t_ko_ref + 50)] = np.minimum(
+            sp_live_ceil[t_ko_ref:min(n, t_ko_ref + 50)], -3.5
+        )
         w_ko = slice(t_ko_ref, min(n, t_ko_ref + 25))
         if np.any(has_both[w_ko]):
             k_bias = 2.2 if np.mean(d_H[w_ko][has_both[w_ko]]) < np.mean(d_A[w_ko][has_both[w_ko]]) else -2.2
             team_score[t_ko_ref:min(n, t_ko_ref + 40)] += k_bias
+            sp_team_bias[t_ko_ref:min(n, t_ko_ref + 40)] += (3.5 if k_bias > 0 else -3.5)
 
     sp_restarts = find_set_piece_restarts(
         events, bx_clean, by_clean, b_spd_filled, mps_fast, oob, px, py,
@@ -595,17 +619,23 @@ def build_frame_evidence(data):
             dead_score[dead_hint_start:t_restart] = np.maximum(
                 dead_score[dead_hint_start:t_restart], 2.5
             )
+            sp_dead_floor[dead_hint_start:t_restart] = np.maximum(
+                sp_dead_floor[dead_hint_start:t_restart], 3.5
+            )
             sp_restart_mask[max(0, dead_hint_start - 25):t_restart + 10] = True
         sp_boost[max(0, t_restart - 3):min(n, t_restart + 15)] = True
         post_end = min(n, t_restart + 75)
         dead_score[t_restart:post_end] = np.minimum(dead_score[t_restart:post_end], -2.0)
+        sp_live_ceil[t_restart:post_end] = np.minimum(sp_live_ceil[t_restart:post_end], -3.5)
         if sp_team is not None:
             bias = 2.6 if sp_team == HOME else -2.6
             team_score[t_restart:min(n, t_restart + 40)] += bias
+            sp_team_bias[t_restart:min(n, t_restart + 40)] += (4.0 if sp_team == HOME else -4.0)
 
     # Deterministic 2nd-half pre-kickoff dead ball: [110808, ko2)
     h2_start = half_blocks[1][1]
     dead_score[h2_start:ko2] = 50.0
+    sp_dead_floor[h2_start:ko2] = 50.0
 
     # 8. Time-varying turnover multipliers via Outcome-Gated touch impulses + Mid-Flight Pass Damping
     touch_any, gate_H, gate_A, dv, dtheta = compute_touch_impulses(
@@ -643,5 +673,11 @@ def build_frame_evidence(data):
         "goal_dead_windows": goal_dead_windows,
         "sp_restarts": sp_restarts,
         "sp_restart_mask": sp_restart_mask,
+        "sp_boost": sp_boost,
+        "phase_dir": phase_dir,
+        "phys_dead_shift": phys_dead_shift,
+        "sp_team_bias": sp_team_bias,
+        "sp_dead_floor": sp_dead_floor,
+        "sp_live_ceil": sp_live_ceil,
         "ko2": ko2,
     }

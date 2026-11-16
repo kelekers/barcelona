@@ -2,95 +2,91 @@
 
 ## 1. Approach
 
-We frame frame-level ball possession inference as a **3-state temporal sequence decoding problem** (`H` = Home / Barcelona, `A` = Away / Athletic Club, `D` = Dead Ball) solved via **time-varying, outcome-gated max-sum Viterbi decoding** on top of physically calibrated kinematic and tactical features.
+We frame frame-level ball possession inference (`H` = Home / Barcelona, `A` = Away / Athletic Club, `D` = Dead Ball) as a **2-stage externally supervised spatiotemporal classification and boundary-detection problem** decoded via **Forward-Backward Posterior Sampling + Minimum Bayes Risk (MBR) Decoding** optimizing expected `spellF1` directly:
 
-Why a physics-driven feature model + time-varying Viterbi decoder rather than per-frame classification or supervised training:
-1. **The ranking metric (`spellF1`) measures interval-level possession recovery**, not isolated per-frame accuracy. Per-frame nearest-player heuristics flicker rapidly during passes, aerial duels, and tracking noise, fragmenting a single match into 600–900+ micro-possessions. Time-varying Viterbi decoding enforces temporal persistence through state-transition penalties modulated by physical ball-touch impulses (`H <-> A`) while placing changepoints directly where cumulative evidence shifts, avoiding the boundary blurring of symmetric majority-vote smoothing.
-2. **Compliance and zero overfitting:** Only the first 5 minutes (17 possessions) are publicly labelled, and competition rules prohibit using them for training or parameter tuning as well as any hand-labelling on the match. All physical thresholds (speeds in `m/s`, distances in metres, durations in seconds) and state penalties are derived from football kinematics and full-match unlabeled data properties rather than fitted to the 5-minute public ground truth.
-3. **Speed and reproducibility:** The entire pipeline relies solely on `numpy` and `pandas` (matching `requirements.txt`), executes deterministically in ~7 seconds across all 199,319 frames, and produces byte-identical output across runs.
+1. **Domain-Aligned Multi-Head Architecture (No `BAR-ATH` Labels Used):**
+   Instead of hand-tuning emission weights or fitting a monolithic model that would overfit to Metrica's `ball = NaN` dead-ball convention, we decompose prediction into three specialized LightGBM heads (`src/train_metrica.py`, `src/ml_features.py`):
+   - **`Dead_players` (`stage1_dead_players`, `stage2_dead_players`):** Trained exclusively on **ball-blind collective player kinematics and exact PELT change-point regime features** (`src/changepoints.py`), symmetrized under `H <-> A`. Because collective player speed quantiles (`mean`, `p90`, `walk`, `sprint`) match `BAR-ATH` almost identically (`median mps = 1.55` vs `1.53 m/s`), this head generalizes across tracking providers without leaking Metrica's `ball = NaN` dead-ball convention.
+   - **`Team_live` (`stage1_team_live`, `stage2_team_live`):** Predicts `P(H | Alive, X)` using permutation-invariant player-ball proximity, velocity alignment, local player density, multi-scale ball impulses, and team spread/advancement. Trained with **ATD observation noise augmentation** (Gaussian ball smoothing, player position jitter, tracklet dropout, live ball dropout) and **Home/Away swap symmetry** at both training and inference time (`0.5 * (p_fwd + 1 - p_rev)`).
+   - **`Bound_ha` (`stage1_bound_ha`, `stage2_bound_ha`):** Predicts `P(H <-> A transition within ±2 frames)` from team-symmetric cross-boundary shifts (`abs_ctrl_shift`, `abs_ddiff_shift`, `cross_ctrl`, `sign_flip_ddiff`) and ball impulses (`dv3`, `dv5`, `dv8`, `dtheta5`, `dtheta8`).
+
+2. **Exact PELT Collective Regime Change-Points (`src/changepoints.py`):**
+   Exact Pruned Exact Linear Time (`pelt_l2_blocks`) segmentation is run per play half on standardized 4D collective motion `[mps, p90, walk, sprint]` at fine (`penalty=28`) and medium (`penalty=65`) scales with 1-frame local refinement, capturing abrupt collective whistle stoppages and restart accelerations even for brief stoppages (`30–60` frames) without ball `NaN`s.
+
+3. **Stage-2 Temporal Context Stacking (`src/train_metrica.py`):**
+   Multi-lag (`±2..60` frames) and multi-window (`5..125` frames) temporal stackers trained on out-of-fold Stage-1 predictions boost Metrica Leave-One-Game-Out CV from `0.928–0.938` to `0.937–0.946` (`AUC_dead`), `0.986–0.990` to `0.988–0.992` (`AUC_team`), and `0.437–0.493` to `0.519–0.577` (`AP_bound_ha`).
+
+4. **Physical & Smart-Tagging Fusion + Forward-Backward MBR Decoding (`src/learned_model.py`, `src/mbr_decoder.py`):**
+   Stage-2 log-odds are fused with unlabeled `BAR-ATH` physical signals (out-of-bounds `oob`, live in-bounds ball rescue `b_spd > 3.0 & min_d < 3.5`, stationary uncontested ball, boundary-exit gaps) and Smart Tagging anchors (`GOALS`, `SET PIECES`, single-team offensive phase tie-breakers). The transition cost `p_ha(t) = clip(2.5 - 4.0 * logit(p_bha(t)), 1.2, 32.0)` is driven directly by the learned boundary detector. Exact Forward-Backward + FFBS draws `140` posterior trajectories per half, and MBR selects the candidate maximizing expected `spellF1` over `[0.3, 0.4, 0.5, 0.6, 0.7]` IoU thresholds.
+
+5. **Compliance & Reproducibility:**
+   All models, transition formulas, and hyperparameters were selected and cross-validated solely on Metrica Games 1–3 and unlabeled `BAR-ATH` diagnostics — never fitted on the 5-minute `BAR-ATH` public ground truth. Running `python src/run_pipeline.py --out evaluation/results/submission.csv` reproduces byte-identical `submission.csv` output deterministically in ~25 seconds.
 
 ---
 
 ## 2. Assets Used and Dropped
 
 ### Used
-- **Tactical Automatic Tracking Data (`BAR-ATH_tactical_atd.txt`, `BAR-ATH_tactical_atd.xml`):** Primary signal for ball coordinates `(x, y)`, team-level player coordinates `(x, y)`, and player speeds `s` (`m/s`) across all 199,319 frames, plus team mapping (`Barcelona` -> `H`, `Atletic Club` -> `A`).
-- **Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`):** Used strictly as a **soft prior and event anchor** (never copied as labels), specifically:
-  - `GOALS` paired with `Kick Off (After Goal)` to identify post-goal celebration stoppages and the conceding team taking the subsequent kick-off.
-  - `SET PIECES` (`Corner Kick`, `Goal Kick`, `Free Kick`, `Throw-in`) to pinpoint exact restart timestamps (`D -> H/A`) and restarting team priors.
-  - Offensive phase codes (`BUILD UP`, `PROGRESSION`, `CREATING CHANCES`, `ATTACKING TRANSITION`, `BALL IN FINAL THIRD`, `BALL IN THE BOX`, `PLAYERS IN THE BOX`, `LONG BALL`) as weak tie-breakers (stronger during live-play ball `NaN` occlusions) whenever only one team is tagged.
-- **Match Timing Metadata (`games.py`):** Half video blocks (`11185..90651`, `110808..190197`) and second-half kick-off boundary (`113742`), fixing ungraded frames to `X` and pre-kickoff second-half frames (`110808..113741`) to `D`.
+- **External Training Dataset — Metrica Sports Sample Data (`github.com/metrica-sports/sample-data`):** Sample Games 1, 2, and 3 (`145,006`, `141,156`, and `143,761` frames at `25 fps`, totaling `429,923` frames and `1,160` possession spells). Converted deterministically from Metrica's public event logs (`PASS`, `RECOVERY`, `BALL LOST`, `SET PIECE`, `SHOT`, `BALL OUT`, `FAULT RECEIVED`, `CARRY`, `CHALLENGE`) to `H/A/D/X` frame labels in `src/metrica_io.py`.
+- **Tactical ATD (`BAR-ATH_tactical_atd.txt`, `BAR-ATH_tactical_atd.xml`):** Primary tracking signal (`px`, `py`, cleaned `ball_x`, `ball_y`, `team_map`) across all `199,319` frames.
+- **Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`):** Used strictly as soft log-odds priors and restart/celebration anchors (`GOALS`, `SET PIECES` with touchline throw-in spatial voting for `Team = N/A`, and single-team offensive phase tie-breakers).
+- **Match Timing Metadata (`games.py`):** Half boundaries (`11185..90651`, `110808..190197`) and second-half kickoff (`113742`).
 
 ### Evaluated and Dropped
-- **Provided ATD `ball_s` column:** Available on only `9,909` of `113,488` visible ball frames; replaced by centered finite-difference velocity computed directly from cleaned `(ball_x, ball_y)` in metres.
-- **Tactical & Broadcast Videos / Broadcast ATD (`BAR-ATH_tactical.mp4`, `BAR-ATH_broadcast*`):** Audited during EDA. Because `85%+` of missing-ball frames in live halves occur during stoppages/celebrations/set-pieces and only 17 live-play `NaN` gaps `> 1s` span a predicted state change across the full match, cross-timeline broadcast synchronization (with 34.2% invalid homography frames, cuts, and replays) or video-based ball detection was omitted in favor of a fast, self-contained, deterministic tracking + tagging pipeline.
+- **Provided ATD `ball_s` column & Broadcast Video/ATD:** `ball_s` is sparsely populated; velocity is computed from cleaned `(ball_x, ball_y)`. Broadcast ATD (34.2% invalid homography, unsynchronized cuts/replays) and video decoding were omitted in favor of the deterministic tracking + Metrica-supervised pipeline.
 
 ---
 
 ## 3. Handling Missing and Noisy Tracking Data
 
-1. **Ball Glitch & Outlier Filtering (`src/atd_io.py`):**
-   - Raw consecutive ball displacements reach up to `134 m/s` due to 1–2 frame tracker snaps. We remove 1–2 frame spikes jumping `> 2.2 m/frame` (`55 m/s`) that immediately snap back, plus isolated `<= 4`-frame islands separated by `>= 25` `NaN` frames and `> 12 m` away from adjacent valid ball trajectories.
-2. **Short Live-Play Interpolation vs. Long-Gap Classification (`src/features.py`):**
-   - Short gaps (`<= 35` frames / `1.4 s`) are linearly interpolated for smooth proximity and velocity estimates and biased toward staying alive (`H`/`A`).
-   - Long gaps (`> 35` frames) are classified using a **two-tier collective activity & reset profile** (`mean` and `90th percentile` player speed across the pitch, plus pitch-boundary proximity):
-     - **Live-play occlusions:** Gaps with active collective speeds (`mean >= 1.92 m/s`, `p90 >= 2.75 m/s`) and no boundary exit stay alive (`dead_score < 0`), preventing false `D` predictions.
-     - **Tier-1 stoppages:** Gaps with slow collective speed (`mean < 1.50 m/s`) or pitch-boundary exits are marked dead (`dead_score > 0`).
-     - **Tier-2 jogging resets (`>= 65` frames, `1.50 <= mean < 1.92 m/s`):** Recover untagged fouls, offsides, and slow set-piece resets where players jog back into shape whenever at least two of three stoppage signatures hold: (i) no chasing sprints (`p90 < 3.1 m/s`), (ii) second-half deceleration (`mps_second_half < mps_first_half` and `< 1.60 m/s`), or (iii) post-gap stationary ball (`b_spd[b+2:b+18] < 1.5 m/s`) or out-of-bounds re-entry.
-3. **Player Tracklet Slot Switching:**
-   - Because the 46 track slots swap identities, no per-player history or shirt-number tracking is used. All player features are permutation-invariant per-team minimums (`d_H`, `d_A`) and collective pitch speed quantiles (`mean_ps`, `p90_ps`).
+1. **Ball Glitch & Outlier Filtering (`src/atd_io.py`):** Removes 1–2 frame tracker spikes (`> 2.2 m/frame` with snap-back) and isolated `<= 4`-frame islands jumping `> 12 m`.
+2. **ATD Smoothing & Radial Offset Alignment (`src/train_metrica.py`):** Audit of unlabeled `BAR-ATH` kinematics showed that ATD's ball track is temporally smoothed (`dv` span=3 p95 `2.65 m/s` vs `7.96 m/s` in raw Metrica) and `min_d` has a larger offset (`median 1.82 m` vs `0.29 m` in raw Metrica). Training combines clean Metrica with two ATD-augmented copies (`gaussian_filter1d` ball smoothing `sigma=2.0/2.6`, `0.55/0.75 m` player jitter, burst tracklet dropouts, and live ball dropout runs).
+3. **Ball-Blind Dead-Ball Estimation + Live-Ball Rescue:** `Dead_players` sees only player kinematics and PELT regimes, avoiding Metrica's `ball = NaN` dead-ball bias. On `BAR-ATH`, visible in-bounds motion (`b_spd > 3.0 & min_d < 3.5`) provides a `-2.6` log-odds live rescue to protect slow tactical build-up pauses from false `D` predictions, while `oob` (`+5.5`) and `SET PIECES` priors catch visible dead balls.
 
 ---
 
 ## 4. Training Data
 
-**None.** No external labelled match datasets were used for supervised training, and no labels from the provided `BAR-ATH` match (including the 5-minute public ground truth) were used to train or fit parameters. All parameters represent physical football quantities and structural priors.
+- **External Open Dataset:** Metrica Sports Sample Games 1, 2, and 3 (`data/external/metrica/`), human-annotated event logs paired with `25 fps` optical tracking, converted deterministically via `src/metrica_io.py`.
+  - Game 1: `145,006` frames (`40,911 H`, `38,984 A`, `65,111 D`, `381` possessions).
+  - Game 2: `141,156` frames (`42,882 H`, `39,764 A`, `58,510 D`, `364` possessions).
+  - Game 3: `143,761` frames (`49,831 H`, `47,832 A`, `46,098 D`, `415` possessions).
+- **`BAR-ATH` Labels Used:** **None.** Neither the 5-minute public GT nor any hand labels on `BAR-ATH` were used for training, feature selection, or hyperparameter tuning.
 
 ---
 
-## 5. Possession Rules Implemented
+## 5. Cross-Validation & Sanity Checks
 
-1. **Alive vs. Dead Ball (`D`):**
-   - **Out-of-bounds (`oob`) & touchline setups:** Visible ball positions outside `[0, 1]` (with a `0.004` tolerance for boundary jitter) and stationary balls held near sidelines/endlines strongly favour `D`.
-   - **Asymmetric collective activity & uncontested slow ball:** Low collective player speed (`mean_ps < 1.30 m/s`, `p90_ps < 2.00 m/s`) provides strong `D` evidence, while higher speeds only gently favour Alive so players jogging back into shape during a Goal Kick or Corner setup do not erase `D`. Out-of-bounds evidence uses a tight `±3`-frame window so stoppage boundaries remain sharp. To detect non-set-piece stoppages promptly without waiting for full collective standstill, we combine an **uncontested slow ball** detector (`b_spd < 2.3 m/s`, `min_d > 3.5 m`, `mean_ps < 1.38 m/s`) with **deceleration inflection detection** (`b_spd < 4.5 m/s`, `min_d > 5.5 m` while collective speed drops `< 1.32 m/s` within `1 s`).
-   - **Build-up pause protection:** Short (`< 4.2 s`) visible in-bounds pauses without a `SET PIECES` tag and short (`< 1.4 s`) `D` blips are bridged back to the surrounding team possession so slow build-up pauses at a defender's feet do not split possessions.
-   - **Goal celebrations & Set Pieces:** Post-goal celebration tails ending at `Kick Off (After Goal)` are marked `D` up to the kick-off instant (`~83` frames after tag start). For non-kickoff `SET PIECES`, the exact acceleration onset of in-bounds ball motion (`b_spd >= 3.4 m/s` or `> 2.5 m` displacement with sharp pre-to-post speed step) marks the restart (`D -> team`), and any preceding out-of-bounds exit within 14s is bridged continuously as `D` until the restart.
-   - **Throw-in team inference (`Team = N/A`):** All 26 throw-in tags carry `Team = N/A`; the restarting team is inferred by voting on players positioned near the touchline (`y < 0.035` or `y > 0.965`) and closest to the ball around the restart window.
-2. **Controlled Possession vs. Passes, Deflections, and Contested Balls (`H` vs. `A`):**
-   - **Ball-in-flight attenuation:** Frame-level team evidence decays exponentially with nearest-player distance (`exp(-min_d / 1.7)`) and quadratic ball speed above a dribble/flight threshold (`9.5 m/s` when dribbling within `1.6 m`, `6.0 m/s` when farther away), so passes or clearances flying past defenders do not flip possession.
-   - **Causal close-control confirmation:** Sustained proximity (`d < 2.1 m`, `b_spd < 9.5 m/s`) over an asymmetric causal trailing window (`[t - 14, t + 1]`) reinforces controlled possession without pulling transitions prematurely before the receiving player reaches the ball.
-   - **Contested-ball damping:** When players from both teams are close to the ball at comparable distances (`opp_d` small and `|d_A - d_H|` small), team evidence is damped so 50/50 duels stay with the preceding possessor until one team gains clear control.
-   - **Outcome-gated time-varying transitions, mid-flight pass damping & boundary snapping:** Ball velocity-vector impulses (`|Δv_b| > 3.5 m/s` with a player within `2.8 m`) are validated over a post-touch outcome window (`[+5, +65]` frames: sustained own-team control, `> 12 m` clearance displacement, or dead-ball exit). Confirmed touch impulses and set-piece restarts lower the `H <-> A` transition penalty (`0.78x`), while fast passes flying past defenders (`b_spd > 7.0 m/s`, `min_d > 1.35 m`, turning angle `< 35°`, `|Δv_b| <= 4.5 m/s`) raise the turnover penalty (`1.8x`). After Viterbi decoding and micro-segment cleanup (`< 0.72 s`), a **Boundary Snap-to-Impulse** post-processor (`[-8, +16]` frames, guarded against colliding segments) shifts `H <-> A` turnovers to the local physical touch-impulse peak and `H/A -> D` exits to the exact out-of-bounds crossing frame, followed by a **high-speed sandwich filter** absorbing brief `< 2.2 s` undeflected (`< 30°`) fly-by segments (`median b_spd > 7.0 m/s`). (Asymmetric forward/backward `mps_slow` windows, a strict 5-state `ctrl`/`flight` topology prohibiting flight transitions, RTS Kalman smoothing on short gaps, and Hungarian tracklet stitching were evaluated in ablation and omitted because they reduced boundary accuracy or over-merged valid transitions.)
-3. **Abstentions (`X`):**
-   - Ungraded frames (`< 11185`, `90652..110807`, `>= 190198`) are labelled `X`. Inside graded play blocks, the Viterbi decoder outputs explicit `H`, `A`, or `D` on every frame.
+- **Metrica Leave-One-Game-Out CV (ATD-noisy held-out matches):**
+  - Heuristic baseline (without Smart Tagging): mean `spellF1 = 0.3695` (`0.3698`, `0.3481`, `0.3907`).
+  - 2-stage Metrica GBDT + PELT + Boundary-modulated decoding + live-ball rescue: mean `spellF1 = 0.6654` (`0.7012`, `0.6650`, `0.6301`), `macroF1 = 0.8773`.
+- **Full-Match `BAR-ATH` Unlabeled Diagnostics (`158,857` graded frames):**
+  - `H: 50,711 (31.9%)`, `A: 31,841 (20.0%)`, `D: 76,305 (48.0%)`, `Home alive share: 61.4%`, `297` possessions (`mean 11.1 s`).
+  - Goal celebration dead-ball `D%`: `100.0%`, `100.0%`, `97.7%`, `100.0%`.
+  - Non-kickoff Set Pieces alignment: `51/53` pre-restart `D`, `51/52` restarting team match within `+2s`.
+- **Public 5-Minute Pipeline Sanity Slice (`BAR-ATH_possession_gt_public.csv`, `7,500` frames):**
+  - `macroF1 = 0.8834` (`H 0.9016`, `A 0.8778`, `D 0.8707`, `kappa 0.8215`, `acc 0.8875`), `alive/dead F1 = 0.9686`, `team acc both-alive = 92.04%`.
+  - `spellF1 = 0.6400` (`@0.5 IoU = 0.7333`, `@0.7 IoU = 0.4667`, `transF1 @±25f = 0.4444`), up from `0.5875` (`@0.5 = 0.6250`, `transF1 = 0.3243`) for the previous heuristic Viterbi submission and `0.4242` for `baseline_smooth125`.
 
 ---
 
-## 6. Limitations
+## 6. Reproduction
 
-- **Single-touch clearances & fast counter-press duels:** Without pose/foot-contact detection from video, a rapid 1–2 second midfield scramble where both teams touch the ball briefly remains ambiguous in ATD alone.
-- **Throw-in team attribution edge cases:** When both teams crowd the touchline without clear ball-to-thrower separation before the throw, the spatial vote can occasionally favour the wrong side at restart until the first in-bounds reception corrects it.
-- **Smart Tagging errors:** Because Smart Tagging is automatic, rare missed set pieces without collective slowdown or false-positive tags rely purely on the underlying ATD kinematics.
-- **Potential next steps with more time:** Synchronizing `broadcast` ATD (during `valid == 1` stretches) via player point-cloud matching to recover the 17 live-play `NaN` gaps that span state changes, and running a lightweight cropped ball detector on `BAR-ATH_tactical.mp4` specifically around ambiguous set-piece restarts and box scrambles.
-
----
-
-## 7. Reproduction
-
-1. Install minimal dependencies (Python 3.8+):
+1. Install pipeline dependencies (and scorer dependencies):
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements-pipeline.txt
    ```
 2. Place the competition data bundle in `./data` (or set `MTAH_DATA_DIR`).
-3. Generate the deterministic submission CSV:
+3. *(Optional, pre-trained models ship in `./models/`)* Download Metrica Sample Games 1–3 into `data/external/metrica/` and retrain:
+   ```bash
+   python src/train_metrica.py
+   ```
+4. Generate the deterministic submission CSV (also supports `--mode heuristic` for the legacy physics-only baseline):
    ```bash
    python src/run_pipeline.py --out evaluation/results/submission.csv
    ```
-4. Validate format and inspect summary statistics:
+5. Validate format and run the public sanity evaluation:
    ```bash
    python evaluation/validate_submission.py evaluation/results/submission.csv
-   ```
-5. Check against the public 5-minute pipeline sanity slice:
-   ```bash
-   python evaluation/run_evaluation.py --bootstrap 1000
+   python evaluation/run_evaluation.py --bootstrap 500
    ```
