@@ -132,7 +132,7 @@ def compute_touch_impulses(bx_i, by_i, d_H, d_A, dead_score, pitch, fps):
 
     gate_H = _outcome_gate(d_H, d_A)
     gate_A = _outcome_gate(d_A, d_H)
-    return touch_any, gate_H, gate_A
+    return touch_any, gate_H, gate_A, dv
 
 
 def compute_player_activity(ps):
@@ -579,7 +579,7 @@ def build_frame_evidence(data):
     dead_score[h2_start:ko2] = 50.0
 
     # 8. Time-varying turnover multipliers via Outcome-Gated touch impulses
-    touch_any, gate_H, gate_A = compute_touch_impulses(
+    touch_any, gate_H, gate_A, dv = compute_touch_impulses(
         bx_i, by_i, d_H, d_A, dead_score, pitch, fps
     )
     touch_or_sp = touch_any | sp_boost
@@ -597,6 +597,7 @@ def build_frame_evidence(data):
         "dead_score": dead_score,
         "mult_to_H": mult_to_H,
         "mult_to_A": mult_to_A,
+        "dv": dv,
         "vis_clean": vis_clean,
         "vis_interp": vis_i,
         "oob": oob,

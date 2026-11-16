@@ -110,6 +110,56 @@ def cleanup_short_segments(codes, oob_slice, vis_slice, sp_slice,
     return out
 
 
+def snap_transitions(codes, dv, d_h, d_a, oob, start_idx, end_idx, min_seg_len=18):
+    """Align Viterbi H<->A and H/A->D(OOB) transition boundaries to physical touch/OOB peaks.
+
+    Preserves segment sequence and enforces a minimum segment length guard so neighboring
+    boundaries never collide or create micro-segments.
+    """
+    out = codes.copy()
+    seg = out[start_idx:end_idx]
+    if len(seg) == 0:
+        return out
+
+    breaks = np.flatnonzero(seg[1:] != seg[:-1]) + 1
+    bounds = np.concatenate(([0], breaks, [len(seg)]))
+
+    last_cut = start_idx
+    for j in range(1, len(bounds) - 1):
+        t_vit = start_idx + int(bounds[j])
+        next_start = start_idx + int(bounds[j + 1])
+        prev_st = int(out[t_vit - 1])
+        next_st = int(out[t_vit])
+
+        w0 = max(last_cut + min_seg_len, t_vit - 8)
+        w1 = min(next_start - min_seg_len, t_vit + 16)
+        if w1 <= w0 + 2:
+            last_cut = t_vit
+            continue
+
+        best_t = t_vit
+        if prev_st in (H, A) and next_st in (H, A):
+            d_next = d_h[w0:w1] if next_st == H else d_a[w0:w1]
+            d_prev = d_a[w0:w1] if next_st == H else d_h[w0:w1]
+            if np.max(dv[w0:w1]) > 2.5 or np.min(d_next) < 2.2:
+                sc = ((dv[w0:w1] / 4.0)
+                      + np.exp(-np.nan_to_num(d_next, nan=99.0) / 1.5)
+                      - 0.5 * np.exp(-np.nan_to_num(d_prev, nan=99.0) / 1.5))
+                best_t = w0 + int(np.argmax(sc))
+        elif prev_st in (H, A) and next_st == D:
+            cand_oob = np.flatnonzero(oob[w0:w1])
+            if len(cand_oob):
+                best_t = w0 + int(cand_oob[0])
+
+        if best_t > t_vit:
+            out[t_vit:best_t] = prev_st
+        elif best_t < t_vit:
+            out[best_t:t_vit] = next_st
+        last_cut = best_t
+
+    return out
+
+
 def decode_match(data, features, p_ha=54.0, p_ad=34.0, p_da=22.0):
     """Decode full 199,319 frames into H/A/D/X label array."""
     n = data["n_frames"]
@@ -117,6 +167,9 @@ def decode_match(data, features, p_ha=54.0, p_ad=34.0, p_da=22.0):
     dead_score = features["dead_score"]
     mult_to_h = features["mult_to_H"]
     mult_to_a = features["mult_to_A"]
+    dv = features["dv"]
+    d_h = features["d_H"]
+    d_a = features["d_A"]
     half_blocks = data["half_blocks"]
     ko2 = features["ko2"]
 
@@ -142,6 +195,7 @@ def decode_match(data, features, p_ha=54.0, p_ad=34.0, p_da=22.0):
     codes[h1_s:h1_e + 1] = cleanup_short_segments(
         h1_seq, oob[h1_s:h1_e + 1], vis[h1_s:h1_e + 1], sp_mask[h1_s:h1_e + 1]
     )
+    codes = snap_transitions(codes, dv, d_h, d_a, oob, h1_s, h1_e + 1)
 
     _, h2_s, h2_e = half_blocks[1]
     codes[h2_s:ko2] = D
@@ -152,5 +206,6 @@ def decode_match(data, features, p_ha=54.0, p_ad=34.0, p_da=22.0):
     codes[ko2:h2_e + 1] = cleanup_short_segments(
         h2_seq, oob[ko2:h2_e + 1], vis[ko2:h2_e + 1], sp_mask[ko2:h2_e + 1]
     )
+    codes = snap_transitions(codes, dv, d_h, d_a, oob, ko2, h2_e + 1)
 
     return LABEL_CHARS[codes], codes
