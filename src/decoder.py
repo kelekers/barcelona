@@ -18,6 +18,13 @@ from .common import A, D, H, X
 DEFAULT_PENALTIES = {"switch": 6.0, "stop": 8.0, "restart": 8.0}
 MIN_PROB = 1e-4
 
+# Every decoded label is moved this many frames earlier. The model is trained on DFL labels and
+# places transitions a few frames later than the Metrica labels do (median +2 to +5 frames by
+# transition type on the held-out Metrica games); the competition's ground truth comes from the
+# Metrica side of that convention. Measured on those held-out games only: spellF1 rises on all
+# six runs for an advance of 1-5 frames and peaks at 3. See TECHNICAL_REPORT.md, section 5.2.
+LABEL_ADVANCE_FRAMES = 3
+
 
 def penalty_matrix(switch, stop, restart):
     """cost[i][j] of moving from state i to state j, in log-probability units."""
@@ -78,7 +85,18 @@ def viterbi3(logp, cost):
     return np.array(out, np.int8)
 
 
-def decode(prob, half_blocks, penalties=None, forced_dead=()):
+def advance(codes, half_blocks, frames):
+    """Move every label `frames` frames earlier inside each half (the last label is repeated)."""
+    if frames <= 0:
+        return codes
+    out = codes.copy()
+    for _, first, last in half_blocks:
+        segment = codes[first:last + 1]
+        out[first:last + 1] = np.concatenate([segment[frames:], np.repeat(segment[-1], frames)])
+    return out
+
+
+def decode(prob, half_blocks, penalties=None, forced_dead=(), advance_frames=LABEL_ADVANCE_FRAMES):
     """Label codes for every frame: Viterbi inside each half, X outside.
 
     forced_dead is a list of (first, last) frame spans known to be dead for a documented,
@@ -93,4 +111,7 @@ def decode(prob, half_blocks, penalties=None, forced_dead=()):
     codes = np.full(len(prob), X, np.int8)
     for _, first, last in half_blocks:
         codes[first:last + 1] = viterbi3(logp[first:last + 1], cost)
+    codes = advance(codes, half_blocks, advance_frames)
+    for first, last in forced_dead:
+        codes[first:last + 1] = D      # the documented span stays exactly where it is
     return codes

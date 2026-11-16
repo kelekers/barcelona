@@ -120,25 +120,36 @@ two corruption levels that bracket the competition tracking's unlabelled statist
 
 | game | corruption | spellF1 | macroF1 | possessions predicted / true |
 |---|---|---|---|---|
-| Metrica 1 | light | 0.720 | 0.909 | 326 / 381 |
-| Metrica 1 | heavy | 0.596 | 0.894 | 302 / 381 |
-| Metrica 2 | light | 0.665 | 0.902 | 281 / 364 |
-| Metrica 2 | heavy | 0.610 | 0.885 | 291 / 364 |
-| Metrica 3 | light | 0.669 | 0.905 | 329 / 415 |
-| Metrica 3 | heavy | 0.572 | 0.880 | 356 / 415 |
-| **mean** | **light** | **0.685** | **0.905** | |
-| **mean** | **heavy** | **0.593** | **0.886** | |
+| Metrica 1 | light | 0.726 | 0.910 | 326 / 381 |
+| Metrica 1 | heavy | 0.602 | 0.895 | 302 / 381 |
+| Metrica 2 | light | 0.672 | 0.904 | 281 / 364 |
+| Metrica 2 | heavy | 0.613 | 0.886 | 291 / 364 |
+| Metrica 3 | light | 0.673 | 0.906 | 329 / 415 |
+| Metrica 3 | heavy | 0.574 | 0.882 | 356 / 415 |
+| **mean** | **light** | **0.690** | **0.907** | |
+| **mean** | **heavy** | **0.596** | **0.888** | |
 
 The dead/alive head never sees the ball, so these numbers do not depend on the Metrica
 convention of dropping the ball during stoppages.
 
-### 5.2 Decoder penalties
+### 5.2 Decoder penalties and label timing
 
 The three penalties were set to (change team 6, stop 8, restart 8) before any search. A grid of
-54 combinations over the six runs above gives a best mean spellF1 of 0.642, the pre-set values
-0.639, and the worst corner (all penalties near zero) 0.583. Every setting with a change-team
-penalty of 4.5 or more lies within 0.007 of the best. The plateau is flat, so the pre-set values
-were kept.
+54 combinations over the six runs above (before the timing step below) gives a best mean spellF1
+of 0.642, the pre-set values 0.639, and the worst corner (all penalties near zero) 0.583. Every
+setting with a change-team penalty of 4.5 or more lies within 0.007 of the best. The plateau is
+flat, so the pre-set values were kept.
+
+**Label timing.** On the same six runs the model's transitions sit a median of 2 to 5 frames
+later than the Metrica labels, depending on the transition type. The model learned its timing
+from DFL labels, and the competition's ground truth comes from the Metrica side of that
+convention, so every decoded label is moved 3 frames earlier. Moving k frames earlier gives a
+mean spellF1 of 0.6386 / 0.6414 / 0.6427 / 0.6432 / 0.6424 / 0.6407 / 0.6376 for k = 0 … 6: a
+smooth single peak, and at k = 3 all six runs improve. The table in 5.1 includes this step.
+
+One tracking-only measurement is consistent with it: while a player carries the ball, the
+velocities of ball and carrier correlate best at a lag of -2.6 frames in the DFL data (its
+player tracks trail the ball) and -0.25 frames in the competition tracking.
 
 ### 5.3 Is there a provider gap?
 
@@ -151,8 +162,8 @@ held-out 7th DFL match and on the Metrica games:
 | light | 0.702 | 0.733 |
 | heavy | 0.633 | 0.631 |
 
-Same provider or a different one, the score is the same, and predicted transitions sit a median
-of one frame from the Metrica labels. The DFL and Metrica possession definitions therefore agree
+Same provider or a different one, the score is the same, and that model's predicted transitions
+sat a median of one to two frames from the Metrica labels. The DFL and Metrica possession definitions therefore agree
 to within what this metric can resolve, which is the basis for expecting the DFL-trained model
 to agree with the competition's ground truth too. (This one-head development model was later
 replaced; see section 6.)
@@ -178,6 +189,14 @@ It lowered spellF1 on 5 of 6 (mean -0.008) while raising macroF1 slightly: the f
 probabilities are smoother, which helps per-frame accuracy and merges short possessions. The
 submission therefore does not use it, and with it goes the Smart Tagging, which only entered
 through the adaptation student. The code remains behind `--adapt` as a record of what was tried.
+(These figures were measured before the 3-frame timing step of 5.2, hence the small difference
+from the table in 5.1.)
+
+**Removing very short predicted possessions was tested and left out.** On the held-out runs
+only 33% of predicted possessions under one second and 52% of those between one and two seconds
+match a true one, against 87% above eight seconds. Deleting them still costs more than it saves:
+mean spellF1 falls from 0.639 to 0.634 with a one-second minimum and to 0.583 with two seconds,
+because the true short possessions go with the false ones.
 
 Touch features and dense sampling around label changes were kept because they raised spellF1 on
 all 12 development runs (Metrica light 0.691 -> 0.733, heavy 0.609 -> 0.631).
@@ -202,11 +221,15 @@ The submitted file on the public window, from `evaluation/run_evaluation.py`:
 
 | | macroF1 | spellF1 | possessions (true 17) | transition F1 at +/-1 s |
 |---|---|---|---|---|
-| this branch | 0.915 | 0.556 | 19 | 0.558 |
+| this branch | 0.917 | 0.544 | 19 | 0.558 |
 | `baseline_smooth50` (published floor) | 0.621 | 0.326 | 26 | 0.082 |
 
-Per-class F1 is 0.928 / 0.913 / 0.902 for H / A / D. These figures are reported as a pipeline
-check and nothing more.
+Per-class F1 is 0.929 / 0.916 / 0.906 for H / A / D. These figures are reported as a pipeline
+check and nothing more. Of the 19 predicted possessions, 9 match no true possession at IoU 0.5
+(eight of them between 1.8 and 5.1 seconds long): on this window the model's weakness is
+inventing short possessions, not missing long ones. The 3-frame timing step of 5.2 moved the
+window's spellF1 from 0.556 to 0.544 and its macroF1 from 0.915 to 0.917; it was adopted on the
+external evidence regardless.
 
 ## 7. Possession rules implemented
 
