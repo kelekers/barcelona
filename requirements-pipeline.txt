@@ -1,0 +1,9 @@
+# Everything src/run_pipeline.py needs to regenerate the submission. Pinned to the versions the
+# submitted file was produced with (Python 3.13).
+#
+# scipy is only needed to retrain (src/train.py, src/validate_external.py); inference uses
+# numpy and lightgbm alone.
+numpy==2.2.6
+pandas==2.2.3
+lightgbm==4.7.0
+scipy==1.15.3

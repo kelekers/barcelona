@@ -1,0 +1,5 @@
+# LightGBM's text model stores byte offsets (tree_sizes=...). If git rewrites its line endings on
+# checkout (core.autocrlf=true, the Git for Windows default) every offset is wrong and the model
+# refuses to load. Keep the files byte-exact on every platform.
+models/*.txt -text
+models/*.json -text
