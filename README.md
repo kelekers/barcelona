@@ -1,215 +1,223 @@
-# More than a Hack 2027 — Phase 1: Ball Possession
+<div align="center">
 
-**Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
-and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
+<a href="TECHNICAL_REPORT.md">
+  <img src="docs/assets/hero_banner.svg" alt="Hybrid v2 + Targeted CV — More than a Hack 2027 Banner" width="100%">
+</a>
 
-A football data challenge on real professional match data, open to analysts, data scientists and
-engineers. You are given one complete LaLiga match — two camera feeds, automatic tracking of every
-player and the ball, automatic tactical tagging, and the camera-to-pitch geometry — and one
-question to answer with it.
+<br/>
+
+![Challenge](https://img.shields.io/badge/More_than_a_Hack_2027-Phase_1:_Ball_Possession-0F172A?style=for-the-badge&logo=fcbarcelona&logoColor=white)
+![Public spellF1](https://img.shields.io/badge/Public_5m_spellF1-0.6625_(+0.2383)-A50044?style=for-the-badge)
+![Public macroF1](https://img.shields.io/badge/Public_5m_macroF1-0.9306_(+0.310)-0052B4?style=for-the-badge)
+![Deterministic](https://img.shields.io/badge/Submission-SHA--256_Verified-10B981?style=for-the-badge)
+![Zero Leakage](https://img.shields.io/badge/BAR--ATH_GT_Fit-0_Frames-0EA5E9?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.14_%7C_CUDA_%2F_CPU-3776AB?style=for-the-badge&logo=python&logoColor=white)
+
+<p align="center">
+  <b><a href="TECHNICAL_REPORT.md">Technical Report</a></b> ·
+  <b><a href="#reproduce-the-submission">Reproduce (SHA-256)</a></b> ·
+  <b><a href="#architecture">Architecture</a></b> ·
+  <b><a href="#quantitative-results">Results &amp; Ablations</a></b> ·
+  <b><a href="#phase-2-computer-vision-impact">CV Impact</a></b> ·
+  <b><a href="#external-data--compliance">Datasets &amp; Compliance</a></b> ·
+  <b><a href="#official-challenge-documentation">Official Docs</a></b>
+</p>
+
+<br/>
+
+<img src="docs/assets/pipeline_demo.gif" alt="Zero-leak possession segmentation demo on held-out DFL Bundesliga tracking (CC-BY 4.0) with simulated ATD dropouts" width="900">
+
+<sub>
+  <b>Zero-Leak Tactical Demo</b> rendered on open-source held-out Bundesliga tracking (<code>DFL-MAT-J03WR9</code>, <b>CC-BY 4.0</b>; <i>zero Barcelona–Athletic Club video frames</i>).<br/>
+  Under realistic ATD drift and shaded <code>ATD Ball NaN</code> dropouts, <code>Hybrid v2</code> preserves exact possession boundaries (<b>96.3%</b> clip accuracy vs <b>42.6%</b> for the 125-frame nearest-player baseline).
+</sub>
+
+</div>
 
 ---
 
-## The task
+## Executive Summary
 
-**For every frame of the match, say who has the ball.**
+**Task:** Predict one frame-level state (`H` Home, `A` Away, `D` Dead ball, or `X` Out of half) for every one of the **199,319 frames (25 Hz)** of **FC Barcelona vs Athletic Club** (LaLiga 2024–25, MD2), ranked primarily by interval-level **`spellF1`** (mean match F1 across IoU thresholds `0.3`–`0.7`), with **`macroF1`** as tie-breaker.
 
+The challenge tracking is automatic and uncorrected: **40.7%** of graded frames have `ball = NaN` (median gap **268 frames**), player IDs drift or swap across stoppages, and brief noisy deflections must never fracture continuous possession spells.
+
+| Dimension | Raw ATD / Strongest Official Baseline (`smooth125`) | Our Submitted Pipeline (`hybrid v2 + CV`) |
+|---|---:|---:|
+| **Public 5-Min `spellF1` (Rank 1 / 7 entries)** | `0.4242` (`16` spells, `18.5s` mean) | **`0.6625`** (`15` spells, `16.4s` vs `17` GT) |
+| **Public 5-Min `macroF1` (`H / A / D`)** | `0.5812` | **`0.9306`** (`0.9366 / 0.9428 / 0.9123`) |
+| **Public 5-Min Boundary `transF1 @25f` & Team Acc** | `0.1667` · `88.54%` | **`0.5946`** · **`95.87%`** |
+| **BAR-ATH Graded Ball Missingness (`ball = NaN`)** | `40.7%` (`med gap 268 f`) | **`25.4%`** (`+24,276 f` recovered · `med gap 34 f`) |
+| **Target Ground-Truth Leakage (`gt/*`)** | None | **`0 frames`** (Zero tuning on public 5m GT) |
+
+> Full methodology, negative results, external cross-provider validation, and physical/Smart-Tagging rules are documented in **[TECHNICAL_REPORT.md](TECHNICAL_REPORT.md)**.
+
+---
+
+## Architecture
+
+Every ML component is trained strictly on **external Bundesliga (`DFL` IDSSE) matches degraded with calibrated ATD noise** (`light` + `heavy` drift and dropout regimes), enhanced with **self-supervised computer vision (`YOLO26s`)** on `BAR-ATH` tactical video outside the public 5-minute window, and decoded via an exact **Minimum Bayes Risk (MBR) soft-IoU DP decoder**.
+
+```mermaid
+flowchart LR
+    ATD["Automatic Tracking (ATD)<br/>46 player slots + ball (40.7% NaN)"] --> CV1["YOLO26s Ball Recovery<br/>139 linked chains (+24,276 f)<br/>& Homography Polygon Filter"]
+    VID["Tactical Video + Homography<br/>(Self-Supervised, Zero GT Fit)"] --> CV1
+    VID --> CV2["Shadow-Invariant Jersey Audit<br/>99.35% held-out player acc<br/>Repairs 5 tracklet swaps (6,359 f)"]
+    ATD --> CV2
+    CV1 --> S1["Stage 1 · Cross-Domain LGBM<br/>4 Degraded DFL Models<br/>(dead, team, dl_bnd, ha_bnd)"]
+    CV2 --> S1
+    S1 --> S2["Stage 2 · Temporal Calibrator<br/>MLP + Dual LGBM on Noisy<br/>Bundesliga Residuals"]
+    TAG["Smart Tagging (GOALS / SET PIECES)<br/>+ Pitch OOB / Motion Physics"] --> MBR["Hybrid v2 + MBR DP Decoder<br/>Maximizes Soft Expected Spell IoU"]
+    S2 --> MBR
+    MBR --> KICK["YOLO26s Kick-Onset Snap<br/>Aligns 27 Set-Piece Restarts<br/>(+8.0 f median physical launch)"]
+    KICK --> CSV["evaluation/results/submission.csv<br/>199,319 rows · SHA-256 Verified"]
 ```
-frame,label
-11185,A        away in possession, ball alive
-11186,A
-...
-18240,D        dead ball
-...
-18684,H        home in possession, ball alive
+
+<details>
+<summary><b>How Each Stage Eliminates ATD Noise Without Overfitting Barcelona–Athletic Club</b></summary>
+
+1. **Calibrated Cross-Domain Training (`src/degrade.py`, `src/train.py`):** 7 official `DFL` Bundesliga tracking matches are degraded with slot swaps, track fragmentation, missing limbs/players, and long ball dropouts calibrated to match `BAR-ATH` ATD missingness statistics. Because predictions remain zero-leak, performance scales linearly with external data realism rather than memorizing match patterns.
+2. **Stage-A -> Stage-B Domain-Adapted Tiny-Ball Detector (`src/cv_ball_data.py`, `src/cv_train_ball.py`):** Pretrained [`YOLO26s`](models/ball_yolo26s_stage_b.pt) on public Roboflow `football-tactical` v4 (`CC BY 4.0`, `mAP50 = 0.9575`), then unsupervised-domain-adapted (`Stage-B`) using strictly out-of-window (`frame > 19,000`) 3-frame collinear ATD-agreed pseudo-labels plus replay (`mAP50 = 0.9618` external test, **`0.9950`** on held-out `BAR-ATH` tiles `172k–190k`).
+3. **Homography-Gated DAG Ball Recovery (`src/cv_recover_ball.py`):** Two-pass deterministic GPU inference fills `139` verified ball chains across ATD `NaN` gaps (`+24,276` frames recovered including `1,508` out-of-bounds touchline/goal-line frames), shrinking `BAR-ATH` ball missingness from **40.7% -> 25.4%**.
+4. **Shadow-Invariant Jersey Audit (`src/cv_jersey.py`):** Fits a local illumination-subtracted `(L - L_bg, V - V_bg)` upper-torso color classifier strictly on isolated `frame > 19,000` players (`99.35%` accuracy on unseen `frame <= 19,000`), verifying **99.74%** of `2,840,921` player-frames and cleanly flipping `5` corrupted tracklets (`6,359` frames).
+5. **Stage-2 Temporal Calibration & MBR Decoder (`src/stage2.py`, `src/mbr_decoder.py`):** Jointly sharpens dead-ball/live transitions (`Stage-2 MLP + LGBM`), injects `oob` / `live_in` physics and Smart-Tagging priors (`src/smart_priors.py`), optimizes expected match `spellF1`, and snaps `27` clean set-piece `D -> Live` transitions directly onto physical `YOLO26s` ball kick motion (`src/cv_boundary_motion.py`).
+
+</details>
+
+---
+
+## Quantitative Results
+
+### Zero-Leak External Generalization & Pipeline Progression
+
+Across **1,530 held-out possessions** on **Metrica Sample Data** (Nested LOGO CV) and held-out **Bundesliga `DFL-MAT-J03WR9`**, every architectural upgrade from `crossdomain` -> `hybrid v1` -> `hybrid v2` transfers consistently to **both** external tracking providers and unseen competition minutes:
+
+<div align="center">
+  <img src="docs/assets/model_progression.png" alt="Zero-Leak Cross-Provider Validation and BAR-ATH Public 5-Min Pipeline Progression" width="100%">
+</div>
+
+| System / Variant | Target GT Fit | Public `macroF1` | Public `spellF1` | IoU `0.5 / 0.7` | Poss (`GT=17`) | TransF1 `@12 / @25` | Mean Latency | Team Acc (Both Alive) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **`hybrid v2 + CV` (Submitted)** | **0 frames** | **`0.9306`** | **`0.6625`** | `0.625 /` **`0.563`** | **`15`** (`16.4s`) | `0.3784 /` **`0.5946`** | `-1.9 f` | **`95.87%`** |
+| `hybrid v2` (`--no-cv`, raw ATD) | 0 frames | `0.9216` | `0.6400` | **`0.667`** `/ 0.533` | `13` (`19.0s`) | **`0.5143`** `/ 0.5714` | **`-0.7 f`** | `94.43%` |
+| `hybrid v1` | 0 frames | `0.9110` | `0.6452` | `0.645 / 0.516` | `14` | `0.4865 / 0.5405` | `-0.6 f` | `94.67%` |
+| `crossdomain` | 0 frames | `0.9167` | `0.5444` | `0.500 / 0.444` | `19` | `— / 0.5581` | `+1.4 f` | `94.52%` |
+| `trio` | 0 frames | `0.8834` | `0.6400` | `0.733 / 0.467` | `13` | `0.2778 / 0.4444` | `-6.9 f` | `92.04%` |
+| `baseline_smooth125` (Official Best) | 0 frames | `0.5812` | `0.4242` | `0.424 / 0.242` | `16` (`18.5s`) | `0.1111 / 0.1667` | `-7.7 f` | `88.54%` |
+
+---
+
+## Phase-2 Computer Vision Impact
+
+All Phase-2 CV modules run without a single manual label on Barcelona–Athletic Club while strengthening ball continuity inside ATD blind spots, tracklet team integrity, and restart kick timing across all **158,857 graded full-match frames**:
+
+<div align="center">
+  <img src="docs/assets/cv_impact_summary.png" alt="Phase-2 CV Impact Summary: Ball-NaN recovery, YOLO26s/Jersey precision, and unlabelled full-match balance" width="100%">
+</div>
+
+- **Full-Match Unlabelled Coherence (`158,857` graded frames, `282` spells):** Live team possession settles naturally at **61.71% FC Barcelona / 38.29% Athletic Club** (`Half 1: 66.51% / 33.49%`, `Half 2: 56.78% / 43.22%`, `Dead ball D: 48.4%`), with **`4 / 4`** Goal intervals classified `97.7%–100.0%` dead and post-kickoffs matching scoring order (`A, H, H, A`), plus **`51 / 53`** pre-Set-Piece dead periods and **`52 / 52`** Set-Piece team alignments.
+
+---
+
+## Reproduce the Submission
+
+Pretrained Stage-1/Stage-2/CV weights are already checked into [`models/`](models/) (`ball_yolo26s_stage_b.pt` is `~19.4 MiB`; total [`models/`](models/) size is `28.15 MB`, well under GitHub's `100 MB` threshold with no Git LFS required). The pipeline produces a **bit-identical** CSV across deterministic runs:
+
+```powershell
+# 1. Create/activate environment and install exact pinned dependencies
+pip install -r requirements-pipeline.txt
+
+# 2. Place the enrolled BAR-ATH bundle under ./data (or set $env:MTAH_DATA_DIR / export MTAH_DATA_DIR)
+# 3. Generate the final submission (uses pre-trained Stage-1, Stage-2, and YOLO26s Stage-B weights)
+python src/run_pipeline.py --out evaluation/results/submission.csv
+
+# 4. Run official contract validation and public 5-minute scoring
+python evaluation/validate_submission.py evaluation/results/submission.csv
+python evaluation/run_evaluation.py --gt public
 ```
 
-That is the whole task. One CSV, one row per video frame, 199,319 rows. It is scored automatically
-against a private frame-by-frame ground truth, so there is a number at the end and no argument
-about it — no jury, and no presentation to argue from.
+```powershell
+# 5. Verify bit-identical SHA-256 checksum
+# Windows (PowerShell):
+(Get-FileHash evaluation/results/submission.csv -Algorithm SHA256).Hash.ToLower()
+# Linux / macOS (Bash):
+sha256sum evaluation/results/submission.csv
+```
 
-The tracking is automatic and uncorrected: it has gaps and identity
-switches, and the ball itself is invisible on 41% of the frames you are scored on.
+Expected checksum:
 
----
+```text
+93e9cba65fd636da5be4ff8693517b91f678ba1fc7cd15af93da98b2e31ad39f
+```
 
-## The challenge in one screen
-
-| |                                                                                                                           |
-|---|---------------------------------------------------------------------------------------------------------------------------|
-| **Input** | one full match: tactical video, broadcast video, automatic tracking **with the ball** for both, Smart Tagging, homography |
-| **Output** | `frame,label` CSV, 199,319 rows, labels `H` / `A` / `D` / `X`                                                             |
-| **Ranked on** | `spellF1` — how many of the match's real possessions you recovered as whole possessions                                   |
-| **Also reported** | `macroF1` — the per-frame view, and the first tie-break                                                                   |
-| **Baseline to beat** | `spellF1` **0.2433**, in this repository                                                                                  |
-| **Ground truth you get** | the first **5 minutes** of play — to check your pipeline, not to train on                                              |
-| **Ground truth you are scored on** | the full match, **private**                                                                                               |
-
-It is deliberately **not** a tracking challenge. The tracking, tagging and homography are given to
-you so that nobody has to rebuild detection, re-identification and camera calibration before
-getting to the actual question. See [CHALLENGE.md](CHALLENGE.md).
+> Both GPU (`cuda`, deterministic FP16/FP32 batch=8 inference, `~37 s` once CV caches exist; first run also extracts/caches CV artifacts from tactical `.mp4`) and `--no-cv` CPU fallback (`python src/run_pipeline.py --no-cv`) are supported. See [`TECHNICAL_REPORT.md`](TECHNICAL_REPORT.md#9-reproduction) for exact retraining and external validation commands.
 
 ---
 
-## Try it right now
+## External Data & Compliance
 
-The scorer, a 5-minute ground truth and four working baselines are in this repository. No
-enrolment, no download, no data:
+| Dataset | Role | Access / License |
+|---|---|---|
+| **DFL Bundesliga Open Data (IDSSE)** | Stage-1 & Stage-2 training (`7` matches) + held-out cross-domain val (`DFL-MAT-J03WR9`) | Public open dataset · [Bassek et al. 2025, *Scientific Data* 12:195 (`CC-BY 4.0`)](https://doi.org/10.1038/s41597-025-04505-y) |
+| **Metrica Sports Sample Data** | External Nested LOGO generalization (`3` matches) | Public open repository · [metrica-sports/sample-data](https://github.com/metrica-sports/sample-data) |
+| **Roboflow `football_tactical` v4** | Stage-A YOLO26s ball detector training (`640x640`, `class 0 = ball` only) | Public dataset · [Alfonso Secretará Técnica (`CC BY 4.0`)](https://universe.roboflow.com/alfonso-secretara-tcnica/football-tactical) |
+
+- **Zero Raw Competition Data in Git:** `git ls-files` contains zero `.mp4`, `_atd.txt`, `_atd.xml`, `_smart_tagging.xml`, `_homography.csv`, or real match screenshots; all raw competition files stay strictly `.gitignore`d under `data/`.
+- **Strict Rules Compliance:** Public `gt/BAR-ATH_possession_gt_public.csv` frames (`0..19,000`) are excluded from **every** Stage-1, Stage-2, YOLO26s Stage-B, and Jersey audit training split.
+
+---
+
+<details>
+<summary><b>Repository Layout & Pretrained Artifact Inventory</b></summary>
+
+```text
+TECHNICAL_REPORT.md          Full methodological write-up, ablations & external validation
+requirements-pipeline.txt    Exact pinned Python / Torch / CUDA / Ultralytics / LightGBM environment
+models/                      All committed model weights (28.15 MB total, < 100 MB, no LFS needed)
+  ball_yolo26s_stage_b.pt    Domain-adapted YOLO26s tiny-ball detector (19.4 MiB)
+  dead_head.txt, team_head.txt, bound_dl.txt, bound_ha.txt    Stage-1 Cross-Domain LGBM ensemble
+  stage2_mlp.npz, dead2.txt, team2.txt, *_meta.json           Stage-2 Calibrators
+src/
+  run_pipeline.py            End-to-end deterministic inference entry point
+  cv_ball_data.py            Stage-A tiling (640->1138x640) & Stage-B 3-frame collinear mining
+  cv_train_ball.py           Deterministic YOLO26s training CLI (--stage a|b)
+  cv_recover_ball.py         Two-pass homography-filtered YOLO26s + DAG ball recovery in ATD NaNs
+  cv_jersey.py               Shadow-invariant (L-L_bg, V-V_bg) player tracklet team swap audit
+  cv_boundary_motion.py      Unsmoothed YOLO26s kick-onset snapping around D -> Live restarts
+  cv_integration.py          Safely integrates CV ball recovery, jersey repairs & kick snaps
+  stage2.py / train_stage2.py    Noisy-Bundesliga residual temporal calibrator
+  smart_priors.py / mbr_decoder.py    Physics/Smart-Tag priors + Soft-IoU MBR DP decoder
+  train.py / features.py / degrade.py / validate_external.py    DFL/Metrica training & LOGO harness
+docs/assets/                 Dark-themed hero SVG, demo GIF (CC-BY 4.0 DFL), and quantitative PNG charts
+evaluation/                  Official challenge scorer, validator, scoreboard & baseline CSVs
+```
+
+</details>
+
+<details>
+<summary><b>Official Challenge Documentation & Baseline Quickstart (More than a Hack 2027)</b></summary>
+
+**Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com) and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
+
+### Essential Reading Order
+
+| Document | Contents |
+|---|---|
+| **[CHALLENGE.md](CHALLENGE.md)** | The task, four possession labels (`H` / `A` / `D` / `X`), and possession definitions |
+| **[DATA.md](DATA.md)** | Provided match assets, schemas, and tactical-video frame alignment |
+| **[EVALUATION.md](EVALUATION.md)** | Exact definition of `spellF1`, `macroF1`, transition latency & bootstrap checks |
+| **[SUBMISSION.md](SUBMISSION.md)** | Submission contract, deliverables (`CSV`, public repo, technical doc) |
+| **[RULES.md](RULES.md)** | Allowed external assets, anti-leakage rules, and sharing restrictions |
+| **[FAQ.md](FAQ.md)** · **[OVERVIEW.md](OVERVIEW.md)** | Clarifications, second-half pre-kickoff rule, and Phase 1–2 competition roadmap |
+
+### Run Official Baselines Without Match Data
 
 ```bash
 pip install -r requirements.txt
 python evaluation/run_evaluation.py
 ```
 
-Scored on the public 5 minutes, not on the full match -- which is why the order below is not the
-order of the floor quoted above:
-
-```
-scoreboard  gt/BAR-ATH_possession_gt_public.csv  199319 frames  7500 graded  21 gt segments
-ground truth has 17 possessions of mean 14.2 s  <- compare the poss and dur columns
-
-rank  submission                macroF1  spellF1   poss     dur  
-----  ------------------------  -------  -------  -----  ------  
-   1  baseline_smooth125         0.5812   0.4242     16    18.5  
-   2  baseline_smooth50          0.6207   0.3256     26    10.8  
-   3  baseline_smooth25          0.6200   0.2868     36     7.6  
-   4  baseline_raw               0.5972   0.0378    131     2.0  
-```
-
-Those four are **the same algorithm four times** — nearest tracked player to the ball, then a
-majority vote over a window. Only the window changes. `macroF1` barely moves; `spellF1` moves by a
-factor of eleven. That disagreement is the whole point of the metric, and
-[EVALUATION.md](EVALUATION.md) explains it.
-
-Once you have the data, regenerate them yourself and go further:
-
-```bash
-python starter/baseline.py                              # rebuild the four baselines
-python evaluation/validate_submission.py <your>.csv     # before every submission
-```
-
-**Validate every file before you submit it.** `validate_submission.py` runs exactly the checks the
-official scorer runs, and a file that fails them is dropped from the board with a one-line reason.
-It takes two seconds and it is the single most common way a good entry scores nothing.
-
----
-
-## Getting the data
-
-The match assets are released to enrolled participants who have accepted the terms of use.
-
-1. Enrol: **[More than A Hack 2027](https://landing.mobileworldcapital.com/more-than-a-hack-2027)**
-2. Read and sign the terms and conditions in the registration form
-3. You receive a download link.
-4. Unpack it into `./data`, or point `MTAH_DATA_DIR` at wherever you put it.
-
-Full description of every asset and how the frames line up: **[DATA.md](DATA.md)**.
-
----
-
-## Read these, in this order
-
-| | |
-|---|---|
-| **[CHALLENGE.md](CHALLENGE.md)** | the problem, the four labels, what counts as possession |
-| **[DATA.md](DATA.md)** | every provided asset, its format, and the frame alignment |
-| **[EVALUATION.md](EVALUATION.md)** | how you are scored, and why — read before optimising anything |
-| **[SUBMISSION.md](SUBMISSION.md)** | the file contract, the three deliverables, how to submit |
-| **[RULES.md](RULES.md)** | what you may and may not do |
-| **[FAQ.md](FAQ.md)** | |
-| **[OVERVIEW.md](OVERVIEW.md)** | the competition as a whole — context, why the 2027 format changed, the calendar |
-
-
----
-
-## What is in this repository
-
-```
-games.py                    per-match constants, asset paths and the frame alignment
-evaluation/
-  possession_metrics.py     the metric library — every number on the board is defined here
-  run_evaluation.py         the scorer. This exact file produces the official result
-  validate_submission.py    check a file before you send it
-  gt/                       the public 5-minute ground truth
-  results/                  the four baselines; put your submissions here
-starter/
-  baseline.py               the reference baseline, numpy only
-  load_atd.py               read the tracking and line it up with video frames
-  load_smart_tagging.py     read the tactical tagging as video-frame intervals
-  load_homography.py        read the homography; project pitch <-> pixels
-  utils.py                  pitch plotting for the notebooks
-  01_smart_tagging.ipynb    guided tour of the tactical tagging
-  02_tracking_atd.ipynb     guided tour of the tracking data, with plots
-  03_first_submission.ipynb data in, scored submission out — start here
-data/                       unpack the downloaded match assets here. Empty in a fresh clone
-```
-
-The scorer you run locally is the scorer that decides the competition. If it scores on your
-machine, it scores the same way on ours.
-
----
-
-## Submitted Solution (`hybrid v2 + CV`) & Reproduction
-
-Full architecture, ablations, and deliverables are documented in [TECHNICAL_REPORT.md](TECHNICAL_REPORT.md).
-
-### Reproducing the exact submitted file
-
-```bash
-pip install -r requirements-pipeline.txt
-# Unpack the competition match bundle into ./data (or set MTAH_DATA_DIR)
-python src/run_pipeline.py --out evaluation/results/submission.csv
-python evaluation/validate_submission.py evaluation/results/submission.csv
-python evaluation/run_evaluation.py --gt public --bootstrap 1000
-```
-
-- Verified deterministic output hash (`submission.csv`): `SHA-256 = 93e9cba65fd636da5be4ff8693517b91f678ba1fc7cd15af93da98b2e31ad39f`
-- Useful flags on [src/run_pipeline.py](src/run_pipeline.py): `--no-cv` runs fast (`~18 s`) CPU-only Phase-1 `hybrid v2` on raw ATD; `--rebuild-cv` recomputes all Sprint 3/4/5 CV caches (`data/cache/cv_*.npz`) from raw `BAR-ATH_tactical.mp4` using [models/ball_yolo26s_stage_b.pt](models/ball_yolo26s_stage_b.pt).
-
-### External datasets used (zero competition labels used)
-
-| Dataset | Public Source & License | Role |
-|---|---|---|
-| **IDSSE / DFL Open Dataset** (7 Bundesliga / 2. Bundesliga matches) | Bassek et al. 2025, *Scientific Data* (`CC-BY 4.0`, mirror `huggingface.co/datasets/pysport/idsse-data`) | Stage-1 frame heads (`src/train.py` -> `models/dead_head.txt`, `team_head.txt`) |
-| **Metrica Sports Sample Data** (3 anonymised matches) | `https://github.com/metrica-sports/sample-data` | Stage-1 validation & Stage-2 Nested LOGO CV (`src/train_stage2.py` -> `models/*2.txt`, `bound_*.txt`, `stage2_mlp.npz`) |
-| **Roboflow `football-tactical` v4** (`class 0 = ball` only) | `https://universe.roboflow.com/alfonso-secretara-tcnica/football-tactical` (`CC BY 4.0`) | Base `YOLO26s` ball detector prior (`src/cv_train_ball.py` Stage-A), adapted self-supervised on `BAR-ATH` `fr > 19000` (`models/ball_yolo26s_stage_b.pt`) |
-
----
-
-## Requirements
-
-**Python 3.8 or newer.** The evaluation needs `numpy` and `pandas` and nothing else; it is tested
-under 3.8 and 3.11 and produces identical output under both. `starter/baseline.py` needs nothing
-more either — you can reach a scored submission without installing anything else.
-
-The notebooks additionally want `kloppy` and `matplotlib` (`requirements-starter.txt`), and
-**Python 3.9+ is recommended for those**: on Windows, installing Jupyter under 3.8 hits a
-`pywinpty` build failure that has nothing to do with this repository.
-
----
-
-## Timeline
-
-| |                |
-|---|----------------|
-| registration opens | **October 1, 2026** |
-| data released | **October 20, 2026** |
-| submission deadline | **November 17, 2026** |
-| results announced | **Before November 26, 2026**      |
-
----
-
-## Questions
-
-Open an issue for anything about the data, the metrics or the documentation — corrections are
-genuinely useful, and a fix that helps you helps everyone equally. For enrolment and the terms of
-use: **hackathon.talentarena@mobileworldcapital.com**.
-
-## Licence and citation
-
-The code and documentation in this repository are released under the MIT Licence — see
-[LICENSE](LICENSE). **The match data is not covered by it**: it is separately licensed for this
-competition only, under the terms you accept at enrolment.
+Enrolment for official match data: **[More than a Hack 2027](https://landing.mobileworldcapital.com/more-than-a-hack-2027)** · Contact: **hackathon.talentarena@mobileworldcapital.com**.
 
 ```bibtex
 @misc{mtah2027,
@@ -219,3 +227,7 @@ competition only, under the terms you accept at enrolment.
   url    = {https://github.com/metrica-sports/more-than-a-hack-2027}
 }
 ```
+
+> Code and documentation are MIT licensed ([LICENSE](LICENSE)). Competition match assets remain under tournament terms and are never committed.
+
+</details>

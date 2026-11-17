@@ -1,6 +1,23 @@
 # Technical Document — More than a Hack 2027 (branch `hybrid`)
 
+![Status](https://img.shields.io/badge/Submission-hybrid_v2_%2B_CV-A50044?style=flat-square)
+![Public spellF1](https://img.shields.io/badge/Public_5m_spellF1-0.6625-0052B4?style=flat-square)
+![Public macroF1](https://img.shields.io/badge/Public_5m_macroF1-0.9306-0284C7?style=flat-square)
+![Deterministic](https://img.shields.io/badge/SHA--256-93e9cba6...31ad39f-10B981?style=flat-square)
+![Zero Leakage](https://img.shields.io/badge/Target_GT_Leakage-0_Frames-334155?style=flat-square)
+
+---
+
 ## 1. Approach
+
+```mermaid
+flowchart LR
+    ATD["BAR-ATH ATD + Smart Tagging<br/>+ Tactical Video & Homography"] --> CV["Phase-2 CV Recovery<br/>YOLO26s Ball + Jersey Audit"]
+    CV --> S1["Stage 1 LightGBM<br/>7 DFL Matches (Light + Heavy Noise)"]
+    S1 --> S2["Stage 2 Calibrator<br/>MLP + Dual LGBM Residuals"]
+    S2 --> DEC["Physics + Smart-Tag + MBR DP Decoder<br/>+ YOLO26s Kick-Onset Snap"]
+    DEC --> OUT["submission.csv<br/>199,319 rows · deterministic"]
+```
 
 **Learn frame-level possession from 7 official DFL matches with realistic ATD drift, refine with a Stage-2 Temporal Context + Boundary + NumPy-MLP stacker (`src/stage2.py`), fuse with deterministic physical ball-state cues and Smart Tagging anchors (`src/smart_priors.py`), and decode with Learned-Boundary Forward-Backward Minimum Bayes Risk (MBR) optimizing `spellF1`.**
 
@@ -100,6 +117,12 @@ All numbers below are from `src/validate_external.py`, scored with the official
 `evaluation/possession_metrics.py` against labels the model never saw.
 
 ### 5.1 External & Nested LOGO Validation Across Hybrid Versions
+
+<p align="center">
+  <img src="docs/assets/model_progression.png" alt="Figure 1: Cross-provider zero-leak generalization and BAR-ATH public 5-minute pipeline progression" width="100%">
+  <br/>
+  <sub><b>Figure 1:</b> Cross-provider zero-leak generalization across 1,530 held-out possessions (Metrica Nested LOGO CV &amp; held-out Bundesliga <code>DFL-MAT-J03WR9</code>, left) and corresponding progression on the un-fitted <code>BAR-ATH</code> public 5-minute window (right).</sub>
+</p>
 
 All numbers below are scored with the official `evaluation/possession_metrics.py`:
 
@@ -223,6 +246,12 @@ The submitted file on the public window, from `evaluation/run_evaluation.py --bo
 Per-class F1 on the public slice for `hybrid v2 + CV` is **`0.9366 / 0.9428 / 0.9123`** (`H / A / D`), `alive/dead F1 =` **`0.9798`**, `team acc gt-alive =` **`0.9496`** (`+1.41%` over raw ATD), `kappa = 0.8956`, `acc = 0.9343`, `0` abstentions on graded frames.
 
 ### 6.1 Phase-2 Computer Vision Enhancements (`src/cv_*.py`)
+
+<p align="center">
+  <img src="docs/assets/cv_impact_summary.png" alt="Figure 2: Phase-2 Computer Vision impact on BAR-ATH" width="100%">
+  <br/>
+  <sub><b>Figure 2:</b> Phase-2 CV impact across 158,857 graded full-match frames: missing-ball recovery (left), self-supervised YOLO26s/jersey verification accuracy (center), and unlabelled full-match team possession balance and physical anchor coherence (right).</sub>
+</p>
 
 To reduce automatic tracking blind spots on the tactical video without any manual annotation on `BAR-ATH`:
 
