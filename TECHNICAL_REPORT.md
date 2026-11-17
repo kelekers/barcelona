@@ -205,20 +205,32 @@ scores about 0.04 spellF1 lower than the one-head model did (5.1 against 5.3); m
 plausibly what the one-head model had been gaining from the Metrica convention. The window has 17
 possessions; the scorer itself reports that differences below about 0.36 on it are noise.
 
-The submitted file on the public window, from `evaluation/run_evaluation.py --bootstrap 500`, plus unlabelled full-match checks:
+The submitted file on the public window, from `evaluation/run_evaluation.py --bootstrap 1000`, plus unlabelled full-match checks:
 
-- **Full-match unlabelled diagnostics (`158,857` graded frames):** `H 31.5%`, `A 19.6%`, `D 48.8%`, `265` possessions (`mean 12.3 s`, `median 7.0 s`, home alive share `61.63%`, `62.94%` while ball visible); Goal celebrations `D = 100.0%, 100.0%, 97.7%, 100.0%` with `4/4` post-KO team match; Set Pieces `51/53` pre-restart `D` and `52/52` restarting team match; **`96.21%` of out-of-bounds frames (`n=3,611`) marked `D`** (up from `95.24%` in `v1` and `85.57%` in `crossdomain`); byte-identical SHA-256 (`8e225e70cc297861bff7f121985dcb0d536f7e2ec88141484b491f2ce6911ac3`).
-- **Public 5-minute pipeline sanity check (`7,500` frames):**
+- **Full-match unlabelled diagnostics (`158,857` graded frames — `hybrid v2 + CV` final):** `H 31.8%` (`50,552`), `A 19.7%` (`31,364`), `D 48.4%` (`76,941`), `282` possessions (`mean 11.6 s`, `median 6.9 s`, home alive share `61.7%`); Goal celebrations `D = 100.0%, 100.0%, 97.7%, 100.0%` with `4/4` post-KO team match (`A, H, H, A`); Set Pieces `51/53` pre-restart `D` and `52/52` restarting team match; byte-identical SHA-256 (`93e9cba65fd636da5be4ff8693517b91f678ba1fc7cd15af93da98b2e31ad39f`).
+- **Public 5-minute pipeline sanity check (`7,500` frames, zero parameters tuned to public GT):**
 
 | branch | macroF1 | spellF1 | @0.5 / @0.7 | possessions (true 17) | transF1 @±12 / ±25f | latency | team acc (both alive) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| **`hybrid v2` (submitted)** | **0.9216** | **0.6400** | **0.667 / 0.533** | 13 | **0.5143 / 0.5714** | **-0.7 f (med 0.0)** | **94.43%** |
-| `hybrid v1` (`c086d5e`) | 0.9110 | **0.6452** | 0.645 / 0.516 | 14 | 0.4865 / 0.5405 | -0.6 f | **94.67%** |
+| **`hybrid v2 + CV` (submitted)** | **0.9306** | **0.6625** | 0.625 / **0.563** | **15** | 0.3784 / **0.5946** | -1.9 f (med -2.0) | **95.87%** |
+| `hybrid v2` (`--no-cv`, raw ATD) | 0.9216 | 0.6400 | **0.667** / 0.533 | 13 | **0.5143** / 0.5714 | **-0.7 f (med 0.0)** | 94.43% |
+| `hybrid v1` (`c086d5e`) | 0.9110 | 0.6452 | 0.645 / 0.516 | 14 | 0.4865 / 0.5405 | -0.6 f | 94.67% |
 | `crossdomain` | 0.9167 | 0.5444 | 0.500 / 0.444 | 19 | — / 0.5581 | +1.4 f | 94.52% |
 | `trio` | 0.8834 | 0.6400 | 0.733 / 0.467 | 13 | 0.2778 / 0.4444 | -6.9 f | 92.04% |
 | `baseline_smooth125` | 0.5812 | 0.4242 | 0.424 / 0.242 | 16 | 0.1111 / 0.1667 | -7.7 f | 88.54% |
 
-Per-class F1 on the public slice for `hybrid v2` is **`0.9200 / 0.9322 / 0.9127`** (`H / A / D`), `alive/dead F1 =` **`0.9799`**, `team acc gt-alive =` **`0.9355`**, `kappa = 0.8775`, `acc = 0.9229`, `0` abstentions on graded frames.
+Per-class F1 on the public slice for `hybrid v2 + CV` is **`0.9366 / 0.9428 / 0.9123`** (`H / A / D`), `alive/dead F1 =` **`0.9798`**, `team acc gt-alive =` **`0.9496`** (`+1.41%` over raw ATD), `kappa = 0.8956`, `acc = 0.9343`, `0` abstentions on graded frames.
+
+### 6.1 Phase-2 Computer Vision Enhancements (`src/cv_*.py`)
+
+To reduce automatic tracking blind spots on the tactical video without any manual annotation on `BAR-ATH`:
+
+1. **Tiny-Ball Detector (`src/cv_ball_data.py`, `src/cv_train_ball.py`, `models/ball_yolo26s_stage_b.pt`):**
+   - **External dataset (`Stage-A`):** Public Roboflow dataset [`football-tactical` v4](https://universe.roboflow.com/alfonso-secretara-tcnica/football-tactical) (`CC BY 4.0`, `class 0 = ball` only; unified YOLO bounding-box + polygon labels, unstretched `640x640 -> 1138x640` into `640x640` crops with `480->640` zoom crops and opposite-half verified background negatives: `6,262` train, `339` val, `173` test). Achieved `test` `mAP50 = 0.9575` (`P = 0.9542`, `R = 0.9000`).
+   - **Unsupervised Domain Adaptation (`Stage-B`, Option B):** Auto-harvested `BAR-ATH` tiles strictly outside the public 5-minute split (`frame > 19000`, held-out `val_bar` at `172000..190000`) covering both isolated open-grass passes (`min_d >= 2.0 m`, `457` train / `71` val) and near-player dribbles (`0.20 <= min_d < 2.0 m`, `498` train / `87` val) accepted only when `Stage-A` detections agree with ATD and satisfy 3-frame midpoint linearity (`<= 6.5–8.5 px`), plus interior-pitch far-player negatives (`>= 18 m` from ball). Mixed with `2,500` clean Roboflow replay samples, improving external `test` (`mAP50 = 0.9618`, `R = 0.9113`) and held-out `val_bar` (`mAP50 = 0.9950`).
+2. **Targeted Ball Recovery (`src/cv_recover_ball.py`):** Two-pass deterministic GPU inference (`batch=8` FP16) inside all `150` ATD `ball-NaN` gaps (`64,643` frames), filtered by homography pitch polygon (`-0.025..1.025`, rejecting sideline spare balls), metric DAG trajectory linking, stride-2 ROI densification, and light Gaussian smoothing (`sigma = 1.6`). Recovers **`24,276` frames (`37.55%` of all `ball-NaN` frames, including `1,508` touchline/OOB edge frames)** across `139` verified chains, reducing `BAR-ATH` missing-ball rate from `40.7%` to `25.4%`.
+3. **Self-Supervised Jersey Audit (`src/cv_jersey.py`):** Trained a shadow-invariant (`L - L_bg`, `V - V_bg`) upper-chest color classifier purely on isolated `fr > 19000` ATD tracks (`99.35%` accuracy on held-out `fr <= 19000` players). Confirmed `99.74%` of `2,840,921` evaluated tracklet player-frames match their assigned team and surgically repaired `5` high-confidence swapped tracklets (`6,359` player-frames).
+4. **Visual Kick-Onset Boundary Check (`src/cv_boundary_motion.py`):** Evaluated unsmoothed `stride=1` `YOLO26s` displacements around `D -> Live` transitions (`>= 50 f` flanking segments), guarding against post-kick pass-traps via continuous stationary verification since `t_trans - 2`, aligning **`27`** ground set-piece restarts (`mean = +8.63 f`, `median = +8.0 f`) directly onto physical ball launch.
 
 ## 7. Possession rules implemented
 
@@ -243,16 +255,28 @@ The Hybrid layer adds deterministic physical laws and Smart Tagging anchors (`sr
 ```bash
 pip install -r requirements-pipeline.txt
 # place the competition bundle in ./data (or set MTAH_DATA_DIR)
+# runs Hybrid v2 + Phase-2 CV recovery/jersey/boundary alignment (lazily builds data/cache/*.npz if absent)
 python src/run_pipeline.py --out evaluation/results/submission.csv
 python evaluation/validate_submission.py evaluation/results/submission.csv
+python evaluation/run_evaluation.py --gt public --bootstrap 1000
 ```
 
-The trained Stage-1 & Stage-2 external models ship in `models/`. To rebuild them and re-run the validation:
+Useful reproduction flags:
+- `--no-cv`: fast (`~18 s`) CPU-only Phase-1 `Hybrid v2` baseline on raw ATD.
+- `--rebuild-cv`: recompute Sprint 3/4/5 CV artifacts (`data/cache/cv_*.npz`) from raw `BAR-ATH_tactical.mp4` using `models/ball_yolo26s_stage_b.pt`.
+
+The trained external models and Phase-2 `YOLO26s` detector ship in `models/`. To rebuild all models from scratch:
 
 ```bash
+# Phase-1 DFL / Stage-2 models
 python src/download_external.py          # ~3 GB of public data about other games
 python src/train.py                      # Stage-1 DFL -> models/
 python src/train_stage2.py               # Stage-2 Nested LOGO CV + final -> models/
 python src/validate_external.py --settings light heavy --hybrid --stage2-cv
 python src/calibrate_degradation.py      # unlabelled statistics behind the corruption settings
+
+# Phase-2 YOLO26s ball detector (requires data/external/football_tactical Roboflow v4 CC BY 4.0)
+python src/cv_ball_data.py               # unstretch & prepare Stage-A dataset
+python src/cv_train_ball.py --stage A    # train Stage-A on Roboflow
+python src/cv_train_ball.py --stage B    # Option B BAR-ATH adaptation -> models/ball_yolo26s_stage_b.pt
 ```

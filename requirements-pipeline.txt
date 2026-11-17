@@ -1,9 +1,11 @@
-# Everything src/run_pipeline.py needs to regenerate the submission. Pinned to the versions the
-# submitted file was produced with (Python 3.13).
-#
-# scipy and scikit-learn are only needed to retrain (src/train.py, src/train_stage2.py,
-# src/validate_external.py); inference in src/run_pipeline.py uses numpy and lightgbm alone.
-numpy==2.2.6
-pandas==2.2.3
+# Everything src/run_pipeline.py needs to regenerate the final submission deterministically
+# (Python 3.14.7, CUDA 12.6 on RTX 3050 6GB). Using --no-cv uses only numpy, pandas, lightgbm, scipy.
+numpy==2.5.4
+pandas==3.1.1
 lightgbm==4.7.0
-scipy==1.15.3
+scipy==1.18.1
+scikit-learn==1.9.1
+torch==2.14.1+cu126
+torchvision==0.29.1+cu126
+ultralytics==8.4.215
+opencv-python-headless==5.0.0.93

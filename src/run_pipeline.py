@@ -26,6 +26,7 @@ from src import model as frame_model  # noqa: E402
 from src.adapt import adapt  # noqa: E402
 from src.atd_io import load_atd  # noqa: E402
 from src.common import A, D, H, LABEL_CHARS, MODEL_DIR, X  # noqa: E402
+from src.cv_integration import apply_boundary_motion_cv, apply_pre_decode_cv, ensure_pre_decode_cv  # noqa: E402
 from src.decoder import (  # noqa: E402
     DEFAULT_PENALTIES, HYBRID_PENALTIES, HYBRID_V2_ADVANCE_FRAMES, HYBRID_V2_PENALTIES,
     decode, decode_hybrid,
@@ -99,6 +100,10 @@ def main():
                         help="disable Stage-2 Temporal Stacker + Boundary + MLP ensemble (use v1)")
     parser.add_argument("--no-mbr", action="store_true",
                         help="use touch-modulated Viterbi instead of MBR in hybrid mode")
+    parser.add_argument("--no-cv", action="store_true",
+                        help="disable Tahap-2 CV enhancements (run Tahap-1 Hybrid v2 on raw ATD)")
+    parser.add_argument("--rebuild-cv", action="store_true",
+                        help="recompute Sprint 3/4/5 CV artifacts from raw tactical video and YOLO26s weights")
     parser.add_argument("--adapt", action="store_true",
                         help="EXPERIMENTAL: add label-free co-training adaptation")
     parser.add_argument("--no-tags", action="store_true",
@@ -109,6 +114,11 @@ def main():
     started = time.time()
     print("loading tracking ...")
     match = load_atd(game=args.game, data_dir=args.data_dir)
+    use_cv = (not args.no_cv) and (not args.legacy_crossdomain) and (args.game == GAME)
+    if use_cv:
+        ensure_pre_decode_cv(rebuild=args.rebuild_cv)
+        match = apply_pre_decode_cv(match)
+
     if args.load_prob:
         prob = np.load(args.load_prob).astype(np.float64)
     else:
@@ -157,6 +167,9 @@ def main():
         )
 
     write_submission(args.out, codes)
+    if use_cv:
+        codes = apply_boundary_motion_cv(codes, args.out, rebuild=args.rebuild_cv)
+        write_submission(args.out, codes)
     print("wrote {}  ({:.1f}s)".format(args.out, time.time() - started))
     summary(codes, match["half_blocks"], smart=smart)
 
