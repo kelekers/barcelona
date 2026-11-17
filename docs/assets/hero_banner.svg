@@ -1,89 +1,101 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 280" width="100%" role="img" aria-label="Hybrid v2 + CV — More than a Hack 2027 Banner">
-  <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#090D16"/>
-      <stop offset="55%" stop-color="#0F172A"/>
-      <stop offset="100%" stop-color="#18122B"/>
-    </linearGradient>
-    <linearGradient id="blaugrana" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#0052B4"/>
-      <stop offset="50%" stop-color="#A50044"/>
-      <stop offset="100%" stop-color="#F59E0B"/>
-    </linearGradient>
-    <radialGradient id="glowLeft" cx="18%" cy="30%" r="55%">
-      <stop offset="0%" stop-color="#0052B4" stop-opacity="0.22"/>
-      <stop offset="100%" stop-color="#0052B4" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="glowRight" cx="84%" cy="55%" r="48%">
-      <stop offset="0%" stop-color="#A50044" stop-opacity="0.24"/>
-      <stop offset="100%" stop-color="#A50044" stop-opacity="0"/>
-    </radialGradient>
-    <clipPath id="cardClip">
-      <rect width="1200" height="280" rx="18"/>
-    </clipPath>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 260" width="100%" role="img" aria-label="Team TIMOREX — Hybrid v2 + CV Technical Banner">
+  <!-- Clean architectural surface: 2 monochrome tones (#111827 ink, #F8FAFC/#64748B paper/slate) + 1 carmine accent (#9E1B32) -->
+  <rect width="1200" height="260" fill="#F8FAFC"/>
+  <rect x="0" y="0" width="1200" height="3" fill="#9E1B32"/>
+  <line x1="0" y1="259.5" x2="1200" y2="259.5" stroke="#CBD5E1" stroke-width="1"/>
 
-  <g clip-path="url(#cardClip)">
-    <rect width="1200" height="280" fill="url(#bg)"/>
-    <rect width="1200" height="280" fill="url(#glowLeft)"/>
-    <rect width="1200" height="280" fill="url(#glowRight)"/>
+  <!-- Left Editorial Typography (no rounded boxes, no pills) -->
+  <g transform="translate(48, 42)">
+    <text x="0" y="12" fill="#64748B" font-family="Consolas, 'Cascadia Mono', monospace" font-size="11.5" font-weight="600" letter-spacing="1.2">
+      MORE THAN A HACK 2027 · PHASE 1 · BRANCH HYBRID
+    </text>
 
-    <!-- Subtle Vector Tactical Pitch Radar (right side background) -->
-    <g stroke="#94A3B8" stroke-opacity="0.13" stroke-width="1.6" fill="none" transform="translate(650, 24)">
-      <rect x="0" y="0" width="510" height="232" rx="6"/>
-      <line x1="255" y1="0" x2="255" y2="232"/>
-      <circle cx="255" cy="116" r="46"/>
-      <circle cx="255" cy="116" r="3" fill="#94A3B8" fill-opacity="0.25"/>
-      <rect x="0" y="50" width="78" height="132"/>
-      <rect x="432" y="50" width="78" height="132"/>
-      <rect x="0" y="82" width="28" height="68"/>
-      <rect x="482" y="82" width="28" height="68"/>
-      <!-- Simulated ball pass trajectory -->
-      <path d="M 145 162 Q 240 88 335 122" stroke="#38BDF8" stroke-opacity="0.45" stroke-width="2.2" stroke-dasharray="6 5"/>
-      <path d="M 335 122 Q 390 105 426 144" stroke="#F59E0B" stroke-opacity="0.65" stroke-width="2.4"/>
-      <circle cx="145" cy="162" r="5" fill="#3B82F6" fill-opacity="0.7" stroke="none"/>
-      <circle cx="215" cy="112" r="5" fill="#3B82F6" fill-opacity="0.6" stroke="none"/>
-      <circle cx="335" cy="122" r="5" fill="#F43F5E" fill-opacity="0.7" stroke="none"/>
-      <circle cx="426" cy="144" r="6" fill="#FACC15" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="1.5"/>
+    <text x="0" y="58" fill="#111827" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="38" font-weight="700" letter-spacing="-0.6">
+      Hybrid v2 + Targeted CV
+    </text>
+    <text x="0" y="88" fill="#475569" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="15.5" font-weight="400">
+      Frame-level possession segmentation from uncorrected tracking and YOLO26s ball recovery
+    </text>
+
+    <line x1="0" y1="114" x2="690" y2="114" stroke="#E2E8F0" stroke-width="1"/>
+
+    <!-- Open typographic KPI columns separated by crisp hairlines -->
+    <g transform="translate(0, 144)">
+      <text x="0" y="0" fill="#64748B" font-family="Consolas, monospace" font-size="10.5" font-weight="600" letter-spacing="0.8">PUBLIC spellF1</text>
+      <text x="0" y="28" fill="#9E1B32" font-family="Segoe UI, Inter, sans-serif" font-size="25" font-weight="700">0.6625</text>
+
+      <line x1="142" y1="-10" x2="142" y2="36" stroke="#CBD5E1" stroke-width="1"/>
+      <text x="166" y="0" fill="#64748B" font-family="Consolas, monospace" font-size="10.5" font-weight="600" letter-spacing="0.8">PUBLIC macroF1</text>
+      <text x="166" y="28" fill="#111827" font-family="Segoe UI, Inter, sans-serif" font-size="25" font-weight="700">0.9306</text>
+
+      <line x1="318" y1="-10" x2="318" y2="36" stroke="#CBD5E1" stroke-width="1"/>
+      <text x="342" y="0" fill="#64748B" font-family="Consolas, monospace" font-size="10.5" font-weight="600" letter-spacing="0.8">CV BALL RECOVERED</text>
+      <text x="342" y="28" fill="#111827" font-family="Segoe UI, Inter, sans-serif" font-size="25" font-weight="700">+24,276 f</text>
+
+      <line x1="518" y1="-10" x2="518" y2="36" stroke="#CBD5E1" stroke-width="1"/>
+      <text x="542" y="0" fill="#64748B" font-family="Consolas, monospace" font-size="10.5" font-weight="600" letter-spacing="0.8">TARGET GT FIT</text>
+      <text x="542" y="28" fill="#111827" font-family="Segoe UI, Inter, sans-serif" font-size="25" font-weight="700">0 frames</text>
+    </g>
+  </g>
+
+  <!-- Right Orthographic FIFA Law-1 Pitch Schematic (105m x 68m @ S=3.35 -> 351.75 x 227.8) -->
+  <g transform="translate(790, 16)">
+    <!-- White pitch surface inset cleanly without extra outer border box -->
+    <rect x="-8" y="-4" width="367.75" height="235.8" fill="#FFFFFF"/>
+    <!-- Subtle turf stripes inside crisp CAD markings -->
+    <g fill="#F1F5F9" opacity="0.72">
+      <rect x="0" y="0" width="29.3125" height="227.8"/>
+      <rect x="58.625" y="0" width="29.3125" height="227.8"/>
+      <rect x="117.25" y="0" width="29.3125" height="227.8"/>
+      <rect x="175.875" y="0" width="29.3125" height="227.8"/>
+      <rect x="234.5" y="0" width="29.3125" height="227.8"/>
+      <rect x="293.125" y="0" width="29.3125" height="227.8"/>
     </g>
 
-    <!-- Accent top rule -->
-    <rect x="0" y="0" width="1200" height="4" fill="url(#blaugrana)"/>
-    <rect x="0.75" y="0.75" width="1198.5" height="278.5" rx="17.5" fill="none" stroke="#334155" stroke-opacity="0.6" stroke-width="1.5"/>
+    <g stroke="#334155" stroke-width="1.2" fill="none">
+      <!-- Touchlines & Goal Lines (pw=351.75, ph=227.8, S=3.35) -->
+      <rect x="0" y="0" width="351.75" height="227.8"/>
+      <!-- Goal Cages (2m=6.7px deep x 7.32m=24.522px wide) -->
+      <rect x="-6.7" y="101.639" width="6.7" height="24.522" stroke="#64748B"/>
+      <rect x="351.75" y="101.639" width="6.7" height="24.522" stroke="#64748B"/>
+      <!-- Halfway Line & Center Circle (R=9.15m -> 30.6525px) -->
+      <line x1="175.875" y1="0" x2="175.875" y2="227.8"/>
+      <circle cx="175.875" cy="113.9" r="30.6525"/>
+      <circle cx="175.875" cy="113.9" r="1.8" fill="#334155" stroke="none"/>
+      <!-- Penalty Areas (16.5m=55.275 x 40.32m=135.072) -->
+      <rect x="0" y="46.364" width="55.275" height="135.072"/>
+      <rect x="296.475" y="46.364" width="55.275" height="135.072"/>
+      <!-- Goal Areas (5.5m=18.425 x 18.32m=61.372) -->
+      <rect x="0" y="83.214" width="18.425" height="61.372"/>
+      <rect x="333.325" y="83.214" width="18.425" height="61.372"/>
+      <!-- Penalty Spots (11m=36.85) -->
+      <circle cx="36.85" cy="113.9" r="1.6" fill="#334155" stroke="none"/>
+      <circle cx="314.90" cy="113.9" r="1.6" fill="#334155" stroke="none"/>
+      <!-- Exact Geometric Penalty Arcs (dy = 24.497, flush at x=55.275 and x=296.475) -->
+      <path d="M 55.275 89.403 A 30.6525 30.6525 0 0 1 55.275 138.397"/>
+      <path d="M 296.475 138.397 A 30.6525 30.6525 0 0 1 296.475 89.403"/>
+      <!-- Corner Arcs (1m = 3.35px flush) -->
+      <path d="M 3.35 0 A 3.35 3.35 0 0 1 0 3.35"/>
+      <path d="M 351.75 3.35 A 3.35 3.35 0 0 1 348.40 0"/>
+      <path d="M 348.40 227.8 A 3.35 3.35 0 0 1 351.75 224.45"/>
+      <path d="M 0 224.45 A 3.35 3.35 0 0 1 3.35 227.8"/>
+    </g>
 
-    <!-- Left Content -->
-    <g transform="translate(52, 48)">
-      <rect x="0" y="0" width="388" height="26" rx="13" fill="#1E293B" stroke="#334155" stroke-width="1"/>
-      <circle cx="15" cy="13" r="4" fill="#22C55E"/>
-      <text x="27" y="17.5" fill="#CBD5E1" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="11.5" font-weight="600" letter-spacing="0.9">
-        MORE THAN A HACK 2027 · PHASE 1 · BRANCH HYBRID
-      </text>
-
-      <text x="0" y="76" fill="#F8FAFC" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="44" font-weight="800" letter-spacing="-0.8">
-        Hybrid v2 + Targeted CV
-      </text>
-      <text x="0" y="108" fill="#94A3B8" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="16.5" font-weight="500">
-        Cross-Domain Possession Spells from Uncorrected Tracking &amp; Domain-Adapted YOLO26s
-      </text>
-
-      <!-- Bottom KPI Badges inside Banner -->
-      <g transform="translate(0, 134)">
-        <rect x="0" y="0" width="132" height="48" rx="9" fill="#0F172A" fill-opacity="0.88" stroke="#1D4ED8" stroke-opacity="0.65"/>
-        <text x="14" y="19" fill="#93C5FD" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.6">PUBLIC spellF1</text>
-        <text x="14" y="39" fill="#F8FAFC" font-family="Consolas, Segoe UI, monospace" font-size="18" font-weight="700">0.6625</text>
-
-        <rect x="144" y="0" width="136" height="48" rx="9" fill="#0F172A" fill-opacity="0.88" stroke="#A50044" stroke-opacity="0.75"/>
-        <text x="158" y="19" fill="#FDA4AF" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.6">PUBLIC macroF1</text>
-        <text x="158" y="39" fill="#F8FAFC" font-family="Consolas, Segoe UI, monospace" font-size="18" font-weight="700">0.9306</text>
-
-        <rect x="292" y="0" width="164" height="48" rx="9" fill="#0F172A" fill-opacity="0.88" stroke="#0EA5E9" stroke-opacity="0.65"/>
-        <text x="306" y="19" fill="#7DD3FC" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.6">CV BALL RECOVERED</text>
-        <text x="306" y="39" fill="#F8FAFC" font-family="Consolas, Segoe UI, monospace" font-size="18" font-weight="700">+24,276 f</text>
-
-        <rect x="468" y="0" width="150" height="48" rx="9" fill="#0F172A" fill-opacity="0.88" stroke="#10B981" stroke-opacity="0.65"/>
-        <text x="482" y="19" fill="#6EE7B7" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="10.5" font-weight="600" letter-spacing="0.6">GT LEAKAGE</text>
-        <text x="482" y="39" fill="#F8FAFC" font-family="Consolas, Segoe UI, monospace" font-size="18" font-weight="700">0.0000</text>
-      </g>
+    <!-- Minimal Tracking & Ball Trajectory Overlay -->
+    <g>
+      <path d="M 122 152 Q 184 98 234 122" fill="none" stroke="#9E1B32" stroke-width="1.6" stroke-dasharray="4 3"/>
+      <line x1="234" y1="122" x2="270" y2="104" stroke="#111827" stroke-width="1.6"/>
+      <circle cx="15" cy="113.9" r="3.6" fill="#FFFFFF" stroke="#111827" stroke-width="1.4"/>
+      <circle cx="100" cy="74" r="3.6" fill="#FFFFFF" stroke="#111827" stroke-width="1.4"/>
+      <circle cx="138" cy="160" r="3.6" fill="#FFFFFF" stroke="#111827" stroke-width="1.4"/>
+      <circle cx="204" cy="86" r="3.6" fill="#FFFFFF" stroke="#111827" stroke-width="1.4"/>
+      <circle cx="256" cy="148" r="3.6" fill="#FFFFFF" stroke="#111827" stroke-width="1.4"/>
+      <circle cx="336" cy="113.9" r="3.6" fill="#9E1B32" stroke="#FFFFFF" stroke-width="1.2"/>
+      <circle cx="122" cy="152" r="3.6" fill="#9E1B32" stroke="#FFFFFF" stroke-width="1.2"/>
+      <circle cx="170" cy="99" r="3.6" fill="#9E1B32" stroke="#FFFFFF" stroke-width="1.2"/>
+      <circle cx="234" cy="122" r="3.6" fill="#9E1B32" stroke="#FFFFFF" stroke-width="1.2"/>
+      <circle cx="276" cy="90" r="3.6" fill="#9E1B32" stroke="#FFFFFF" stroke-width="1.2"/>
+      <circle cx="270" cy="104" r="4.2" fill="#111827" stroke="#FFFFFF" stroke-width="1.3"/>
     </g>
   </g>
 </svg>

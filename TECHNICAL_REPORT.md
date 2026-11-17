@@ -1,16 +1,13 @@
 # Technical Document — More than a Hack 2027 (branch `hybrid`)
 
-![Status](https://img.shields.io/badge/Submission-hybrid_v2_%2B_CV-A50044?style=flat-square)
-![Public spellF1](https://img.shields.io/badge/Public_5m_spellF1-0.6625-0052B4?style=flat-square)
-![Public macroF1](https://img.shields.io/badge/Public_5m_macroF1-0.9306-0284C7?style=flat-square)
-![Deterministic](https://img.shields.io/badge/SHA--256-93e9cba6...31ad39f-10B981?style=flat-square)
-![Zero Leakage](https://img.shields.io/badge/Target_GT_Leakage-0_Frames-334155?style=flat-square)
+**Team `TIMOREX`** · Method: `hybrid v2 + CV` · Public 5m Check: `spellF1 = 0.6625` / `macroF1 = 0.9306` · Target GT Fit: `0 frames` · CSV SHA-256: `93e9cba65fd636da5be4ff8693517b91f678ba1fc7cd15af93da98b2e31ad39f`
 
 ---
 
 ## 1. Approach
 
 ```mermaid
+%%{init: {'theme': 'neutral'}}%%
 flowchart LR
     ATD["BAR-ATH ATD + Smart Tagging<br/>+ Tactical Video & Homography"] --> CV["Phase-2 CV Recovery<br/>YOLO26s Ball + Jersey Audit"]
     CV --> S1["Stage 1 LightGBM<br/>7 DFL Matches (Light + Heavy Noise)"]
@@ -121,7 +118,7 @@ All numbers below are from `src/validate_external.py`, scored with the official
 <p align="center">
   <img src="docs/assets/model_progression.png" alt="Figure 1: Cross-provider zero-leak generalization and BAR-ATH public 5-minute pipeline progression" width="100%">
   <br/>
-  <sub><b>Figure 1:</b> Cross-provider zero-leak generalization across 1,530 held-out possessions (Metrica Nested LOGO CV &amp; held-out Bundesliga <code>DFL-MAT-J03WR9</code>, left) and corresponding progression on the un-fitted <code>BAR-ATH</code> public 5-minute window (right).</sub>
+  <sub><b>Figure 1:</b> Cross-provider validation across 1,530 held-out possessions (Metrica Nested LOGO CV &amp; held-out Bundesliga <code>DFL-MAT-J03WR9</code>, left) and corresponding progression on the un-fitted <code>BAR-ATH</code> public 5-minute window (right).</sub>
 </p>
 
 All numbers below are scored with the official `evaluation/possession_metrics.py`:
