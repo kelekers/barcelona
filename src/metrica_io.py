@@ -54,10 +54,15 @@ def _read_csv_tracking(path):
     return period, frame, np.stack(xs, 1), np.stack(ys, 1), ball_x, ball_y
 
 
+def _mpath(game_no, filename):
+    nested = os.path.join(METRICA_DIR, "Sample_Game_{}".format(game_no), filename)
+    return nested if os.path.exists(nested) else os.path.join(METRICA_DIR, filename)
+
+
 def _load_game_csv(game_no):
-    base = os.path.join(METRICA_DIR, "Sample_Game_{0}", "Sample_Game_{0}").format(game_no)
-    per_h, fr_h, xh, yh, bx, by = _read_csv_tracking(base + "_RawTrackingData_Home_Team.csv")
-    per_a, fr_a, xa, ya, _, _ = _read_csv_tracking(base + "_RawTrackingData_Away_Team.csv")
+    prefix = "Sample_Game_{}".format(game_no)
+    per_h, fr_h, xh, yh, bx, by = _read_csv_tracking(_mpath(game_no, prefix + "_RawTrackingData_Home_Team.csv"))
+    per_a, fr_a, xa, ya, _, _ = _read_csv_tracking(_mpath(game_no, prefix + "_RawTrackingData_Away_Team.csv"))
     assert np.array_equal(fr_h, fr_a)
     px = np.concatenate([xh, xa], axis=1)
     py = np.concatenate([yh, ya], axis=1)
@@ -66,7 +71,7 @@ def _load_game_csv(game_no):
 
 
 def _load_game3():
-    meta = ET.parse(os.path.join(METRICA_DIR, "Sample_Game_3", "Sample_Game_3_metadata.xml")).getroot()
+    meta = ET.parse(_mpath(3, "Sample_Game_3_metadata.xml")).getroot()
     teams = [t.get("id") for t in meta.iter("Team")]
     home_id = teams[0]
     team_of_player = {p.get("id"): (0 if p.get("teamId") == home_id else 1) for p in meta.iter("Player")}
@@ -96,7 +101,7 @@ def _load_game3():
     half_ranges = [(1, int(params["first_half_start"]), int(params["first_half_end"])),
                    (2, int(params["second_half_start"]), int(params["second_half_end"]))]
 
-    with open(os.path.join(METRICA_DIR, "Sample_Game_3", "Sample_Game_3_tracking.txt")) as fh:
+    with open(_mpath(3, "Sample_Game_3_tracking.txt")) as fh:
         lines = [ln for ln in fh.read().splitlines() if ln]
     n = len(lines)
     frame = np.empty(n, dtype=np.int64)
@@ -131,8 +136,7 @@ def _load_game3():
 # ---------------------------------------------------------------------------------------------
 
 def _events_csv(game_no):
-    ev = pd.read_csv(os.path.join(
-        METRICA_DIR, "Sample_Game_{0}", "Sample_Game_{0}_RawEventsData.csv").format(game_no))
+    ev = pd.read_csv(_mpath(game_no, "Sample_Game_{}_RawEventsData.csv".format(game_no)))
     out = []
     for r in ev.itertuples(index=False):
         out.append({
@@ -147,7 +151,7 @@ def _events_csv(game_no):
 
 
 def _events_json():
-    with open(os.path.join(METRICA_DIR, "Sample_Game_3", "Sample_Game_3_events.json")) as fh:
+    with open(_mpath(3, "Sample_Game_3_events.json")) as fh:
         js = json.load(fh)
     out = []
     for e in js["data"]:

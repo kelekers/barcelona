@@ -31,10 +31,11 @@ for path in (ROOT, os.path.join(ROOT, "evaluation")):
 import possession_metrics as pm  # noqa: E402
 from src import model as frame_model  # noqa: E402
 from src.common import EXTERNAL_DIR, MODEL_DIR, X  # noqa: E402
-from src.decoder import DEFAULT_PENALTIES, decode  # noqa: E402
+from src.decoder import DEFAULT_PENALTIES, HYBRID_PENALTIES, decode, decode_hybrid  # noqa: E402
 from src.degrade import degrade  # noqa: E402
 from src.dfl_io import load_dfl_match  # noqa: E402
 from src.metrica_io import load_metrica_game  # noqa: E402
+from src.smart_priors import compute_physical_cues  # noqa: E402
 
 SETTINGS = ("raw", "light", "heavy")
 GRID = {"switch": (1.0, 2.0, 3.0, 4.5, 6.0, 9.0), "stop": (2.0, 4.0, 8.0),
@@ -78,6 +79,10 @@ if __name__ == "__main__":
     parser.add_argument("--adapt-rounds", type=int, default=1)
     parser.add_argument("--settings", nargs="+", default=list(SETTINGS), choices=SETTINGS,
                         help="corruption settings to score (default: all)")
+    parser.add_argument("--hybrid", action="store_true",
+                        help="evaluate hybrid decoder (physical cues + touch modulation + MBR)")
+    parser.add_argument("--no-mbr", action="store_true",
+                        help="with --hybrid: use touch-modulated Viterbi instead of MBR")
     args = parser.parse_args()
 
     booster, meta = frame_model.load(args.model_dir)
@@ -133,6 +138,29 @@ if __name__ == "__main__":
         sub = [r for r in rows if r[1] == setting and r[0].startswith("metrica")]
         print("  Metrica mean, {:<6}: spellF1 {:.4f}  macroF1 {:.4f}".format(
             setting, np.mean([r[2] for r in sub]), np.mean([r[3] for r in sub])))
+
+    if args.hybrid:
+        print("\nHYBRID decoder (penalties={}, use_mbr={}):".format(HYBRID_PENALTIES, not args.no_mbr))
+        print("  {:<10} {:<6} {:>8} {:>8} {:>6} {:>6}".format("game", "noise", "spellF1", "macroF1", "pred", "true"))
+        hrows = []
+        for gi, (tag, loader) in enumerate(games):
+            for si, setting in enumerate(SETTINGS):
+                if setting not in args.settings:
+                    continue
+                prob, truth, blocks = [e[2:] for e in entries if e[0] == tag and e[1] == setting][0]
+                match = degrade(loader(), setting, seed=5000 + 10 * gi + si)
+                cues = compute_physical_cues(match)
+                pred = decode_hybrid(prob, blocks, cues, smart=None, penalties=HYBRID_PENALTIES,
+                                     use_mbr=(not args.no_mbr))
+                res = pm.evaluate(truth, pred)
+                row = (tag, setting, res["spell_f1_mean"], res["macro_f1"],
+                       res["n_pred_spells"], res["n_gt_spells"])
+                hrows.append(row)
+                print("  {:<10} {:<6} {:>8.4f} {:>8.4f} {:>6} {:>6}".format(*row))
+        for setting in args.settings:
+            sub = [r for r in hrows if r[1] == setting and r[0].startswith("metrica")]
+            print("  Hybrid Metrica mean, {:<6}: spellF1 {:.4f}  macroF1 {:.4f}".format(
+                setting, np.mean([r[2] for r in sub]), np.mean([r[3] for r in sub])))
 
     if args.adapt is not None:
         from src.adapt import adapt
