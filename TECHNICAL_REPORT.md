@@ -2,57 +2,46 @@
 
 ## 1. Approach
 
-**Learn frame-level possession from 7 official DFL matches with realistic ATD drift, fuse with deterministic physical ball-state cues and Smart Tagging anchors, and decode with Touch-Modulated Forward-Backward Minimum Bayes Risk (MBR) optimizing `spellF1`.**
+**Learn frame-level possession from 7 official DFL matches with realistic ATD drift, refine with a Stage-2 Temporal Context + Boundary + NumPy-MLP stacker (`src/stage2.py`), fuse with deterministic physical ball-state cues and Smart Tagging anchors (`src/smart_priors.py`), and decode with Learned-Boundary Forward-Backward Minimum Bayes Risk (MBR) optimizing `spellF1`.**
 
 Only 17 possessions of the competition match are public, and they may not be used to train or
 tune. Every learned weight and every decoder hyperparameter in this pipeline comes from **other**
-games: trained on the 7 DFL open matches and validated out-of-sample on the 3 Metrica sample
-games. The competition match contributes only its unlabelled tracking and automatic Smart Tagging.
+games: Stage-1 trained on the 7 DFL open matches, Stage-2 trained strictly out-of-fold on external games under ATD degradation (calibrated and validated via 3-fold Nested Leave-One-Game-Out CV on the 3 Metrica sample games). The competition match contributes only its unlabelled tracking and automatic Smart Tagging.
 
-The pipeline has four stages:
+The pipeline has five stages:
 
 1. **Features (`src/features.py`).** 256 per-frame features, identical for every data source:
    permutation-invariant (track slots carry no identity), in metres and seconds, mirror-invariant
    (positions enter along the home team's attack axis, inferred per half), missing-aware (ball
    features are NaN while the ball is not tracked) and bidirectional.
 
-2. **External DFL model (`src/model.py`, `src/train.py`).** Two LightGBM heads trained on the 7
+2. **Stage-1 External DFL model (`src/model.py`, `src/train.py`).** Two LightGBM heads trained on the 7
    matches of the DFL open dataset under correlated ATD-matched drift & occlusion corruption
    (`src/degrade.py`):
    - a **ball-blind dead/alive head** using collective player features only;
    - a **team head** (home vs away, given the ball is alive), symmetrised over both team
      orientations at inference.
 
-3. **Physical Ball-State Cues & Smart Tagging Anchors (`src/smart_priors.py`).** While the DFL
-   `dead_head` intentionally ignores the ball to remain provider-neutral, explicit physical laws
-   and Smart Tagging anchors provide clean complementary log-odds without touching any ground-truth
-   label:
-   - *Physical cues (`compute_physical_cues`, tested on Metrica validation)*:
-     - **Out-of-bounds (`oob`)**: visible ball outside `[0, 1]` adds dead-ball evidence (`+4.5`)
-       and lowers the `H/A -> D` exit penalty (`4.0`).
-     - **Live-ball rescue (`live_in`)**: visible in-bounds ball moving `> 3.0 m/s` within `3.5 m`
-       of a player adds `+1.6` log-odds to `H` and `A`, protecting slow tactical build-ups from
-       false `D` calls by the ball-blind head.
-     - **Visible stationary dead balls (`near_line_slow`, `s_ignored`)**: uncontested still balls
-       near touchlines or far from all players while players walk (`+2.2` / `+1.6` on `D`).
-     - **Touch velocity modulation**: local ball velocity impulses (`|\Delta v_b| > 2.2 m/s` within
-       `3.0 m` of a player) halve the `H <-> A` switch penalty (`0.50x`), while fast uncontested
-       passes (`b_spd > 7.5 m/s`, `min_d > 1.8 m`) raise it (`1.50x`).
-   - *Smart Tagging anchors (`compute_smart_tagging_priors`, competition match only)*:
-     - **`GOALS` + `Kick Off (After Goal)`**: marks celebration dead windows (`D`) and forces
-       immediate `Live` exit into the conceding team at kick-off.
-     - **`SET PIECES` restarts**: pins exact ball-acceleration restart timestamps `t_restart`,
-       votes throw-in team (`Team = N/A`) from touchline player proximity, bridges preceding
-       set-piece setup as `D`, and lowers `D -> H/A` transition cost right at `t_restart`.
-     - **Offensive phase tie-breaker**: gentle log-odds prior when only one team has active
-       offensive phase tags (stronger during missing-ball `NaN` stretches).
+3. **Stage-2 Temporal Context Stacker, Learned Boundaries, & Pure-NumPy MLP Ensemble (`src/stage2.py`, `src/train_stage2.py`).**
+   Takes Stage-1 log-odds `ld = logit(P(D))` and `lt = logit(P(H | Live))` across multi-scale shifts (`±2..60` frames), rolling means (`5..125` frames), and bidirectional exponential moving averages (`ewm_bidir`, `tau = 5..60`):
+   - **`bound_ha`**: symmetric `H <-> A` turnover detector trained on live frames using multi-scale ball velocity/angle impulses (`span = 3, 5, 8`), proximity flips, and bidirectional Stage-1 team-logit contrast (fed out-of-fold across games to Stage-2).
+   - **`dead2` & `bound_dl`**: **100% ball-blind** refinements over `ld` and player speeds only — zero ball-visibility or `NaN` features enter them, preserving cross-provider transferability.
+   - **`team2`**: symmetrised `H vs A` temporal refinement over `lt`, `ld`, and `bound_ha`.
+   - **Transition-weighted Logit Ensemble (`w_mlp = 0.25`)**: Stage-2 LightGBM heads (`weight = 1 + 1.5 * boundary_band_10f`) blended in log-odds space with exact pure-NumPy inference of `MLPClassifier(64, 32)` (`models/stage2_mlp.npz`, zero `sklearn` runtime dependency).
 
-4. **Touch-Modulated Forward-Backward MBR Decoding (`src/decoder.py`, `src/mbr_decoder.py`).**
-   Instead of constant-penalty Viterbi MAP (`switch = 6.0`, which over-splits 1.8–5.1 s duels),
-   `decode_hybrid` uses penalties `(switch=20.0, stop=22.0, restart=22.0)` modulated by touch/pass
-   impulses, `oob`, and `sp_boost`, draws `120` posterior trajectories per half via exact
-   Forward-Backward + FFBS (`temp = 0.9`), and selects the candidate maximizing expected `spellF1`
-   over IoU thresholds `[0.3..0.7]`, followed by a `2`-frame DFL-to-Metrica timing advance.
+4. **Physical Ball-State Cues & Smart Tagging Anchors (`src/smart_priors.py`).** Explicit physical laws and automatic Smart Tagging anchors provide complementary log-odds without touching any ground-truth label:
+   - *Physical cues (`compute_physical_cues`)*:
+     - **Out-of-bounds (`oob`)**: visible ball outside `[0, 1]` adds dead-ball evidence (`+4.5`) and lowers the `H/A -> D` exit penalty (`4.0`).
+     - **Live-ball rescue (`live_in`)**: visible in-bounds ball moving `> 3.0 m/s` within `3.5 m` of a player adds `+1.6` log-odds to `H` and `A`, protecting slow build-ups from false `D` calls.
+     - **Visible stationary dead balls (`near_line_slow`, `s_ignored`)**: uncontested still balls near touchlines or far from all players while players walk (`+2.2` / `+1.6` on `D`).
+     - **Touch velocity modulation**: local ball velocity impulses (`|\Delta v_b| > 2.2 m/s` within `3.0 m` of a player) halve the `H <-> A` switch penalty (`0.50x`), while fast uncontested passes (`b_spd > 7.5 m/s`, `min_d > 1.8 m`) raise it (`1.50x`).
+   - *Smart Tagging anchors (`compute_smart_tagging_priors`, competition match only)*:
+     - **`GOALS` + `Kick Off (After Goal)`**: marks celebration dead windows (`D`) and forces immediate `Live` exit into the conceding team at kick-off.
+     - **`SET PIECES` restarts**: pins restart timestamps `t_restart`, votes throw-in team (`Team = N/A`) from touchline player proximity, bridges set-piece setup (`>= 10` frames) as `D`, and lowers transition cost at `t_restart`.
+     - **Active-tempo `ball = NaN` live protection & phase tie-breaker**: when `ATTACKING TRANSITION`, `LONG BALL`, `BUILD UP`, or `PROGRESSION` is active with `mps_fast > 1.55 m/s` and no `SET PIECES`/`GOALS` nearby (`±15`/`±25` frames), `dead_bias = -1.8` guards active play during missing-ball gaps, alongside gentle team-phase log-odds.
+
+5. **Learned-Boundary Forward-Backward MBR Decoding (`src/decoder.py`, `src/mbr_decoder.py`).**
+   `decode_hybrid` combines Stage-2 penalties `(switch=14.0, stop=16.0, restart=16.0)` modulated continuously by both physical touches and learned boundary peaks (`pbha`, `pbdl`), draws `120` posterior trajectories per half via exact Forward-Backward + FFBS (`temp = 0.9`), and selects the candidate maximizing expected `spellF1` over `[0.3..0.7]` IoU (`advance_frames = 0`, already timing-aligned by Stage-2).
 
 ### Why this rather than something else
 
@@ -97,8 +86,8 @@ The pipeline has four stages:
 
 | dataset | games | labels | role |
 |---|---|---|---|
-| IDSSE / DFL open dataset (Bassek et al. 2025, Scientific Data; CC-BY 4.0; mirror `huggingface.co/datasets/pysport/idsse-data`) | 7 Bundesliga / 2. Bundesliga matches, season 2022/23, official 25 Hz positions | per-frame `BallStatus` and `BallPossession` in the position files, annotated by the league's data provider | **training** |
-| Metrica Sports sample data (`github.com/metrica-sports/sample-data`) | 3 anonymised matches, 25 Hz | human event logs, converted to frame labels deterministically (`src/metrica_io.py`) | **validation only** |
+| IDSSE / DFL open dataset (Bassek et al. 2025, Scientific Data; CC-BY 4.0; mirror `huggingface.co/datasets/pysport/idsse-data`) | 7 Bundesliga / 2. Bundesliga matches, season 2022/23, official 25 Hz positions | per-frame `BallStatus` and `BallPossession` in the position files, annotated by the league's data provider | **Stage-1 training** |
+| Metrica Sports sample data (`github.com/metrica-sports/sample-data`) | 3 anonymised matches, 25 Hz | human event logs, converted to frame labels deterministically (`src/metrica_io.py`) | **Stage-1 validation & Stage-2 Nested LOGO CV / training** |
 
 Labels: `D` where `BallStatus = 0`, otherwise `H`/`A` from `BallPossession`. Nobody on this team
 labelled anything. **No label from the competition match was used**, public or otherwise, for
@@ -109,22 +98,27 @@ training, tuning or model selection.
 All numbers below are from `src/validate_external.py`, scored with the official
 `evaluation/possession_metrics.py` against labels the model never saw.
 
-### 5.1 The submitted Hybrid decoder vs `crossdomain` baseline, on unseen Metrica games
+### 5.1 External & Nested LOGO Validation Across Hybrid Versions
 
-Trained on the 7 DFL matches; scored on the 3 Metrica sample games (`src/validate_external.py --settings light heavy --hybrid`), which it never saw and which come from a different provider with a different labelling process:
+All numbers below are scored with the official `evaluation/possession_metrics.py`:
 
-| game | corruption | `crossdomain` spellF1 / macroF1 | `hybrid` (MBR + phys) spellF1 / macroF1 | `hybrid` pred / true |
-|---|---|---|---|---|
-| Metrica 1 | light | 0.7259 / 0.9104 | **0.7375 / 0.9198** | 310 / 381 |
-| Metrica 1 | heavy | 0.6015 / 0.8954 | **0.6296 / 0.9032** | 281 / 381 |
-| Metrica 2 | light | 0.6716 / 0.9035 | **0.6820 / 0.9138** | 270 / 364 |
-| Metrica 2 | heavy | 0.6125 / 0.8861 | **0.6432 / 0.8970** | 266 / 364 |
-| Metrica 3 | light | 0.6731 / 0.9055 | **0.6840 / 0.9134** | 316 / 415 |
-| Metrica 3 | heavy | 0.5743 / 0.8817 | **0.6123 / 0.8903** | 318 / 415 |
-| **mean** | **light** | 0.6902 / 0.9065 | **0.7012 / 0.9157** | |
-| **mean** | **heavy** | 0.5961 / 0.8877 | **0.6284 / 0.8968** | |
+| game | corruption | `crossdomain` spellF1 / macroF1 | `hybrid v1` (S1 + phys + MBR) | **`hybrid v2` (Stage-2 Nested OOF + MLP + MBR)** | `v2` pred / true |
+|---|---|---|---|---|---|
+| Metrica 1 | light | 0.7259 / 0.9104 | 0.7375 / 0.9198 | **0.7538 / 0.9242** | 320 / 381 |
+| Metrica 1 | heavy | 0.6015 / 0.8954 | 0.6296 / 0.9032 | **0.6477 / 0.9106** | 281 / 381 |
+| Metrica 2 | light | 0.6716 / 0.9035 | 0.6820 / 0.9138 | **0.6968 / 0.9206** | 287 / 364 |
+| Metrica 2 | heavy | 0.6125 / 0.8861 | 0.6432 / 0.8970 | **0.6482 / 0.8981** | 271 / 364 |
+| Metrica 3 | light | 0.6731 / 0.9055 | 0.6840 / 0.9134 | **0.7122 / 0.9147** | 323 / 415 |
+| Metrica 3 | heavy | 0.5743 / 0.8817 | 0.6123 / 0.8903 | **0.6184 / 0.8924** | 323 / 415 |
+| **mean** | **light** | 0.6902 / 0.9065 | 0.7012 / 0.9157 | **0.7209 / 0.9198** | |
+| **mean** | **heavy** | 0.5961 / 0.8877 | 0.6284 / 0.8968 | **0.6381 / 0.9004** | |
 
-The Hybrid decoder improves **both** `spellF1` and `macroF1` on **6 of 6** held-out Metrica runs (`+0.0323 spellF1` under heavy ATD-like corruption).
+`hybrid v2` improves **both** `spellF1` and `macroF1` on **6 of 6** Metrica runs in strict 3-fold Nested Leave-One-Game-Out CV (`mean 0.6795 / 0.9101` vs `hybrid v1` `0.6648 / 0.9062` and `crossdomain` `0.6432 / 0.8971`).
+
+Ablations verified and retained/rejected cleanly:
+- **Retraining Stage-1 on DFL at `stride=4`** lowered unseen Metrica to `0.7021 / 0.6137` (kept `stride=8`).
+- **Pure-DFL 7-fold Stage-2** scored `0.7088 / 0.6212` (`mean 0.6650`, retaining `+1.0..+2.2` frame DFL lag); **combined DFL+Metrica Stage-2** scored `0.7090 / 0.6269` (`mean 0.6680`). Calibrating Stage-2 (`dead2`, `team2`, `bound_ha`, `bound_dl`, `MLP`) on Metrica over Stage-1 DFL aligns boundary timing (`lat ~0.0 f`) cleanly while `dead2`/`bound_dl` remain 100% ball-blind.
+- **Dumping 20+ PELT columns into Stage-2 `Xd`** lowered nested CV (`0.6836 -> 0.6764`), so raw PELT was left out.
 
 ### 5.2 Decoder penalties and label timing
 
@@ -213,17 +207,18 @@ possessions; the scorer itself reports that differences below about 0.36 on it a
 
 The submitted file on the public window, from `evaluation/run_evaluation.py --bootstrap 500`, plus unlabelled full-match checks:
 
-- **Full-match unlabelled diagnostics (`158,857` graded frames):** `H 31.5%`, `A 19.0%`, `D 49.5%`, `259` possessions (`mean 12.4 s`, `median 7.5 s`, home alive share `62.4%`); Goal celebrations `D = 99.9%, 100.0%, 97.7%, 100.0%` with `4/4` post-KO team match; Set Pieces `52/53` pre-restart `D` and `52/52` restarting team match; `95.24%` of out-of-bounds frames marked `D`.
+- **Full-match unlabelled diagnostics (`158,857` graded frames):** `H 31.5%`, `A 19.6%`, `D 48.8%`, `265` possessions (`mean 12.3 s`, `median 7.0 s`, home alive share `61.63%`, `62.94%` while ball visible); Goal celebrations `D = 100.0%, 100.0%, 97.7%, 100.0%` with `4/4` post-KO team match; Set Pieces `51/53` pre-restart `D` and `52/52` restarting team match; **`96.21%` of out-of-bounds frames (`n=3,611`) marked `D`** (up from `95.24%` in `v1` and `85.57%` in `crossdomain`); byte-identical SHA-256 (`8e225e70cc297861bff7f121985dcb0d536f7e2ec88141484b491f2ce6911ac3`).
 - **Public 5-minute pipeline sanity check (`7,500` frames):**
 
 | branch | macroF1 | spellF1 | @0.5 / @0.7 | possessions (true 17) | transF1 @±12 / ±25f | latency | team acc (both alive) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| **`hybrid` (submitted)** | **0.9110** | **0.6452** | 0.645 / 0.516 | 14 | **0.4865 / 0.5405** | **-0.6 f** | **94.67%** |
+| **`hybrid v2` (submitted)** | **0.9216** | **0.6400** | **0.667 / 0.533** | 13 | **0.5143 / 0.5714** | **-0.7 f (med 0.0)** | **94.43%** |
+| `hybrid v1` (`c086d5e`) | 0.9110 | **0.6452** | 0.645 / 0.516 | 14 | 0.4865 / 0.5405 | -0.6 f | **94.67%** |
 | `crossdomain` | 0.9167 | 0.5444 | 0.500 / 0.444 | 19 | — / 0.5581 | +1.4 f | 94.52% |
 | `trio` | 0.8834 | 0.6400 | 0.733 / 0.467 | 13 | 0.2778 / 0.4444 | -6.9 f | 92.04% |
 | `baseline_smooth125` | 0.5812 | 0.4242 | 0.424 / 0.242 | 16 | 0.1111 / 0.1667 | -7.7 f | 88.54% |
 
-Per-class F1 on the public slice for `hybrid` is `0.9232 / 0.9203 / 0.8894` (`H / A / D`), `alive/dead F1 = 0.9739`, `0` abstentions on graded frames.
+Per-class F1 on the public slice for `hybrid v2` is **`0.9200 / 0.9322 / 0.9127`** (`H / A / D`), `alive/dead F1 =` **`0.9799`**, `team acc gt-alive =` **`0.9355`**, `kappa = 0.8775`, `acc = 0.9229`, `0` abstentions on graded frames.
 
 ## 7. Possession rules implemented
 
@@ -240,7 +235,7 @@ The Hybrid layer adds deterministic physical laws and Smart Tagging anchors (`sr
 
 - Possessions shorter than two seconds remain the hardest regime when tracking occlusions coincide with rapid tackles/clearances.
 - The `dead_head` depends on player speeds computed from positions, so it assumes smoothly tracked player trajectories (no high-frequency `0.55 m` frame-to-frame flicker; the competition ATD matches clean collective speeds at median `~1.5 m/s`).
-- Smart Tagging is automatic and competition-specific, so its incremental benefit is measured via unlabelled full-match physical anchors (`52/53` Set Pieces, `4/4` Goal kick-offs) rather than Metrica external validation.
+- Smart Tagging is automatic and competition-specific, so its incremental benefit is measured via unlabelled full-match physical anchors (`51/53` pre-D Set Pieces, `52/52` Set Piece team match, `4/4` Goal kick-offs) rather than Metrica external validation.
 - Developed on an 8 GB laptop; DFL training uses every eighth frame (`stride=8`) with `light` and `heavy` drift/dropout settings.
 
 ## 9. Reproduction
@@ -252,11 +247,12 @@ python src/run_pipeline.py --out evaluation/results/submission.csv
 python evaluation/validate_submission.py evaluation/results/submission.csv
 ```
 
-The trained external model ships in `models/`. To rebuild it and re-run the validation:
+The trained Stage-1 & Stage-2 external models ship in `models/`. To rebuild them and re-run the validation:
 
 ```bash
 python src/download_external.py          # ~3 GB of public data about other games
-python src/train.py                      # -> models/
-python src/validate_external.py --settings light heavy --hybrid
+python src/train.py                      # Stage-1 DFL -> models/
+python src/train_stage2.py               # Stage-2 Nested LOGO CV + final -> models/
+python src/validate_external.py --settings light heavy --hybrid --stage2-cv
 python src/calibrate_degradation.py      # unlabelled statistics behind the corruption settings
 ```

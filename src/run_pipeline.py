@@ -27,9 +27,11 @@ from src.adapt import adapt  # noqa: E402
 from src.atd_io import load_atd  # noqa: E402
 from src.common import A, D, H, LABEL_CHARS, MODEL_DIR, X  # noqa: E402
 from src.decoder import (  # noqa: E402
-    DEFAULT_PENALTIES, HYBRID_PENALTIES, decode, decode_hybrid,
+    DEFAULT_PENALTIES, HYBRID_PENALTIES, HYBRID_V2_ADVANCE_FRAMES, HYBRID_V2_PENALTIES,
+    decode, decode_hybrid,
 )
 from src.smart_priors import compute_physical_cues, compute_smart_tagging_priors  # noqa: E402
+from src.stage2 import load_stage2, predict_stage2, stage2_available  # noqa: E402
 from src.tagging import tag_features  # noqa: E402
 
 # FAQ.md: the second half is graded from frame 110,808 but does not kick off until 113,742, and
@@ -93,6 +95,8 @@ def main():
                         help="run original constant-Viterbi crossdomain without physical/MBR/Smart Tagging")
     parser.add_argument("--no-smart-tags", action="store_true",
                         help="disable Smart Tagging anchors in hybrid mode")
+    parser.add_argument("--no-stage2", action="store_true",
+                        help="disable Stage-2 Temporal Stacker + Boundary + MLP ensemble (use v1)")
     parser.add_argument("--no-mbr", action="store_true",
                         help="use touch-modulated Viterbi instead of MBR in hybrid mode")
     parser.add_argument("--adapt", action="store_true",
@@ -134,12 +138,22 @@ def main():
     else:
         print("building physical ball cues & Smart Tagging priors ...")
         cues = compute_physical_cues(match)
+        pbha = pbdl = None
+        if (not args.no_stage2) and stage2_available(args.model_dir):
+            s2_bundle, s2_meta = load_stage2(args.model_dir)
+            print("Stage-2 temporal stacker + Boundary + MLP ensemble (w_mlp={:.2f}) ...".format(
+                s2_bundle["w_mlp"]))
+            prob, pbha, pbdl = predict_stage2(s2_bundle, match, prob, cues)
         if not args.no_smart_tags:
             smart = compute_smart_tagging_priors(match, cues, data_dir=args.data_dir)
-        print("running hybrid {} decoder ...".format("Viterbi" if args.no_mbr else "Forward-Backward MBR"))
+        penalties = HYBRID_V2_PENALTIES if pbha is not None else HYBRID_PENALTIES
+        adv = HYBRID_V2_ADVANCE_FRAMES if pbha is not None else 2
+        print("running hybrid {} decoder (pen={}) ...".format(
+            "Viterbi" if args.no_mbr else "Forward-Backward MBR", penalties))
         codes = decode_hybrid(
             prob, match["half_blocks"], cues, smart=smart, forced_dead=forced,
-            penalties=HYBRID_PENALTIES, use_mbr=(not args.no_mbr),
+            penalties=penalties, pbha=pbha, pbdl=pbdl,
+            use_mbr=(not args.no_mbr), advance_frames=adv,
         )
 
     write_submission(args.out, codes)

@@ -1,0 +1,28 @@
+{
+ "training_games": [
+  "Metrica-1",
+  "Metrica-2",
+  "Metrica-3"
+ ],
+ "settings": [
+  "light",
+  "heavy"
+ ],
+ "penalties": {
+  "switch": 14.0,
+  "stop": 16.0,
+  "restart": 16.0
+ },
+ "advance_frames": 0,
+ "nested_cv": {
+  "light": {
+   "spell_f1": 0.7209165431123271,
+   "macro_f1": 0.9198175927524116
+  },
+  "heavy": {
+   "spell_f1": 0.6381170998775351,
+   "macro_f1": 0.9003576120862967
+  }
+ },
+ "w_mlp": 0.25
+}

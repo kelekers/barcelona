@@ -81,6 +81,8 @@ if __name__ == "__main__":
                         help="corruption settings to score (default: all)")
     parser.add_argument("--hybrid", action="store_true",
                         help="evaluate hybrid decoder (physical cues + touch modulation + MBR)")
+    parser.add_argument("--stage2-cv", action="store_true",
+                        help="evaluate Hybrid Stage-2 via strict 3-fold Nested LOGO CV on Metrica")
     parser.add_argument("--no-mbr", action="store_true",
                         help="with --hybrid: use touch-modulated Viterbi instead of MBR")
     args = parser.parse_args()
@@ -191,3 +193,9 @@ if __name__ == "__main__":
                 sys.stdout.flush()
         print("  mean change in spellF1: {:+.4f}  (helped on {} of {})".format(
             float(np.mean(deltas)), sum(d > 0 for d in deltas), len(deltas)))
+
+    if args.stage2_cv:
+        from src.train_stage2 import load_stage2_items, run_nested_cv
+        print("\nHYBRID Stage-2 + Boundary + MLP (strict 3-fold Nested LOGO CV on Metrica):")
+        items = load_stage2_items(model_dir=args.model_dir)
+        run_nested_cv(items)

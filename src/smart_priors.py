@@ -356,12 +356,22 @@ def compute_smart_tagging_priors(match, cues, data_dir=None):
         "BUILD UP", "PROGRESSION", "CREATING CHANCES", "ATTACKING TRANSITION",
         "BALL IN FINAL THIRD", "BALL IN THE BOX", "PLAYERS IN THE BOX", "LONG BALL",
     }
+    active_tempo_codes = {"ATTACKING TRANSITION", "LONG BALL", "BUILD UP", "PROGRESSION"}
     h_votes = np.zeros(n, dtype=np.float64)
     a_votes = np.zeros(n, dtype=np.float64)
+    sp_any = np.zeros(n, dtype=bool)
+    goal_any = np.zeros(n, dtype=bool)
+    active_tempo = np.zeros(n, dtype=bool)
     for ev in events:
+        s, e = max(0, ev["start_frame"]), min(n, ev["end_frame"])
+        if ev["code"] == "SET PIECES":
+            sp_any[max(0, s - 15):min(n, e + 15)] = True
+        elif ev["code"] == "GOALS":
+            goal_any[max(0, s - 25):min(n, e + 25)] = True
+        if ev["code"] in active_tempo_codes:
+            active_tempo[s:e] = True
         if ev["code"] in off_codes:
             tm_str = (ev["tags"].get("Team") or "").strip().lower()
-            s, e = max(0, ev["start_frame"]), min(n, ev["end_frame"])
             if "barcelona" in tm_str:
                 h_votes[s:e] += 1.0
             elif "atletic" in tm_str or "athletic" in tm_str:
@@ -373,6 +383,9 @@ def compute_smart_tagging_priors(match, cues, data_dir=None):
 
     team_bias = np.where(vis_i, 0.18 * phase_dir, 0.90 * phase_dir)
     dead_bias = np.zeros(n, dtype=np.float64)
+    # Protect active-tempo phases (AT/LB/Build-Up/Progression) during ball-NaN gaps without SP/Goal
+    active_nan_live = (~vis) & (~oob) & active_tempo & (~sp_any) & (~goal_any) & (mps_fast > 1.55)
+    dead_bias = np.where(active_nan_live, -1.8, dead_bias)
     sp_boost = np.zeros(n, dtype=bool)
     sp_mask = np.zeros(n, dtype=bool)
     force_live = np.zeros(n, dtype=bool)
@@ -402,7 +415,7 @@ def compute_smart_tagging_priors(match, cues, data_dir=None):
         match["px"], match["py"], match["team_map"], match["pitch"], n, fps, goal_windows,
     )
     for dead_hint_start, t_restart, sp_team, sp_type in sp_restarts:
-        if t_restart - dead_hint_start >= 15:
+        if t_restart - dead_hint_start >= 10:
             dead_bias[dead_hint_start:t_restart] = np.maximum(dead_bias[dead_hint_start:t_restart], 4.0)
             sp_mask[max(0, dead_hint_start - 25):t_restart + 10] = True
         sp_boost[max(0, t_restart - 3):min(n, t_restart + 15)] = True

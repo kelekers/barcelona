@@ -16,9 +16,13 @@ DEFAULT_PENALTIES = {"switch": 6.0, "stop": 8.0, "restart": 8.0}
 MIN_PROB = 1e-4
 LABEL_ADVANCE_FRAMES = 3
 
-# Hybrid defaults validated on unseen external Metrica (light + heavy)
+# Hybrid v1 defaults (Stage-1 only fallback)
 HYBRID_PENALTIES = {"switch": 20.0, "stop": 22.0, "restart": 22.0}
 HYBRID_ADVANCE_FRAMES = 2
+
+# Hybrid v2 defaults (Stage-2 Temporal Context + Boundary + MLP Ensemble)
+HYBRID_V2_PENALTIES = {"switch": 14.0, "stop": 16.0, "restart": 16.0}
+HYBRID_V2_ADVANCE_FRAMES = 0
 
 
 def penalty_matrix(switch, stop, restart):
@@ -143,10 +147,15 @@ def decode(prob, half_blocks, penalties=None, forced_dead=(), advance_frames=LAB
 
 def decode_hybrid(prob, half_blocks, cues, smart=None, forced_dead=(),
                   penalties=None, touch_mult=0.50, pass_mult=1.50, live_shift=1.6,
+                  pbha=None, pbdl=None, b_alpha=2.5, b_hi=1.05, dl_alpha=1.5,
                   use_mbr=True, mbr_temp=0.9, mbr_samples=120, seed=42,
-                  advance_frames=HYBRID_ADVANCE_FRAMES):
-    """Hybrid decoder: DFL probabilities + physical ball cues + Smart Tagging + MBR."""
-    penalties = penalties or HYBRID_PENALTIES
+                  advance_frames=None):
+    """Hybrid decoder: DFL (+ Stage-2) probabilities + physical ball cues + Smart Tagging + MBR."""
+    has_bound = pbha is not None
+    if penalties is None:
+        penalties = HYBRID_V2_PENALTIES if has_bound else HYBRID_PENALTIES
+    if advance_frames is None:
+        advance_frames = HYBRID_V2_ADVANCE_FRAMES if has_bound else HYBRID_ADVANCE_FRAMES
     sw = float(penalties["switch"])
     st = float(penalties["stop"])
     rs = float(penalties["restart"])
@@ -178,15 +187,25 @@ def decode_hybrid(prob, half_blocks, cues, smart=None, forced_dead=(),
         logp[first:last + 1, H] = logp[first:last + 1, A] = -1e3
         logp[first:last + 1, D] = 0.0
 
-    # 3. Touch- and boundary-modulated transition costs
+    # 3. Touch- and learned-boundary-modulated transition costs
     p_ha = np.where(cues["touch"], sw * touch_mult, np.where(cues["fast_pass"], sw * pass_mult, sw))
+    if pbha is not None:
+        p_ha = p_ha * np.clip(b_hi - b_alpha * np.maximum(0.0, pbha - 0.05), 0.15, b_hi)
     if smart is not None:
         p_ha = np.where(sp_boost, np.minimum(p_ha, 8.0), p_ha)
-    p_ad = np.where(cues["oob"], min(st, 4.0), st)
-    p_da = np.where(sp_boost, min(rs, 6.0), rs)
+
+    if pbdl is not None:
+        dl_sc = np.clip(1.0 - dl_alpha * np.maximum(0.0, pbdl - 0.08), 0.30, 1.0)
+    else:
+        dl_sc = np.ones(n, dtype=np.float64)
+    p_ad = np.where(cues["oob"], min(st, 4.0), st * dl_sc)
+    p_da = np.where(sp_boost, min(rs, 6.0), rs * dl_sc)
 
     oob = cues["oob"]
     codes = np.full(n, X, dtype=np.int8)
+    scale_grid = (0.70, 0.85, 1.0, 1.15, 1.35) if has_bound else (0.80, 0.90, 1.0, 1.15, 1.30)
+    mp_grid = (0, 8, 12, 16) if has_bound else (0, 10, 14)
+
     for h_idx, (_, first, last) in enumerate(half_blocks):
         s, e1 = first, last + 1
         em_h = logp[s:e1]
@@ -206,9 +225,9 @@ def decode_hybrid(prob, half_blocks, cues, smart=None, forced_dead=(),
         ]
 
         candidates = []
-        for sc in (0.80, 0.90, 1.0, 1.15, 1.30):
+        for sc in scale_grid:
             rv = viterbi_tv(em_h, pha_h * sc, pad_h * sc, pda_h * sc)
-            for mp in (0, 10, 14):
+            for mp in mp_grid:
                 candidates.append(_clean_micro(rv, min_poss=mp, min_dead=16, oob_slice=oob_h, sp_slice=sp_h))
         for k in range(8):
             candidates.append(_clean_micro(samp[k], min_poss=10, min_dead=16, oob_slice=oob_h, sp_slice=sp_h))
