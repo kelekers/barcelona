@@ -149,6 +149,33 @@ machine, it scores the same way on ours.
 
 ---
 
+## Submitted Solution (`hybrid v2 + CV`) & Reproduction
+
+Full architecture, ablations, and deliverables are documented in [TECHNICAL_REPORT.md](TECHNICAL_REPORT.md).
+
+### Reproducing the exact submitted file
+
+```bash
+pip install -r requirements-pipeline.txt
+# Unpack the competition match bundle into ./data (or set MTAH_DATA_DIR)
+python src/run_pipeline.py --out evaluation/results/submission.csv
+python evaluation/validate_submission.py evaluation/results/submission.csv
+python evaluation/run_evaluation.py --gt public --bootstrap 1000
+```
+
+- Verified deterministic output hash (`submission.csv`): `SHA-256 = 93e9cba65fd636da5be4ff8693517b91f678ba1fc7cd15af93da98b2e31ad39f`
+- Useful flags on [src/run_pipeline.py](src/run_pipeline.py): `--no-cv` runs fast (`~18 s`) CPU-only Phase-1 `hybrid v2` on raw ATD; `--rebuild-cv` recomputes all Sprint 3/4/5 CV caches (`data/cache/cv_*.npz`) from raw `BAR-ATH_tactical.mp4` using [models/ball_yolo26s_stage_b.pt](models/ball_yolo26s_stage_b.pt).
+
+### External datasets used (zero competition labels used)
+
+| Dataset | Public Source & License | Role |
+|---|---|---|
+| **IDSSE / DFL Open Dataset** (7 Bundesliga / 2. Bundesliga matches) | Bassek et al. 2025, *Scientific Data* (`CC-BY 4.0`, mirror `huggingface.co/datasets/pysport/idsse-data`) | Stage-1 frame heads (`src/train.py` -> `models/dead_head.txt`, `team_head.txt`) |
+| **Metrica Sports Sample Data** (3 anonymised matches) | `https://github.com/metrica-sports/sample-data` | Stage-1 validation & Stage-2 Nested LOGO CV (`src/train_stage2.py` -> `models/*2.txt`, `bound_*.txt`, `stage2_mlp.npz`) |
+| **Roboflow `football-tactical` v4** (`class 0 = ball` only) | `https://universe.roboflow.com/alfonso-secretara-tcnica/football-tactical` (`CC BY 4.0`) | Base `YOLO26s` ball detector prior (`src/cv_train_ball.py` Stage-A), adapted self-supervised on `BAR-ATH` `fr > 19000` (`models/ball_yolo26s_stage_b.pt`) |
+
+---
+
 ## Requirements
 
 **Python 3.8 or newer.** The evaluation needs `numpy` and `pandas` and nothing else; it is tested
