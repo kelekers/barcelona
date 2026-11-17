@@ -54,17 +54,17 @@ The pipeline has five stages:
   (median distance to the nearest player 0.28 m, against 1.91 m in the competition tracking and
   1.42 m in the DFL data), and its ball is absent on 87–100% of dead frames, so any model trained
   on it learns "no ball = dead". Those games are used instead as the **validation set**.
-- **Deep sequence models** were not attempted: ten labelled matches and a CPU.
-- **Video and the broadcast recording** were not used.
+- **End-to-end video classifiers over full plays** were not trained end-to-end: instead, lightweight targeted Computer Vision (`YOLO26s` ball recovery on ATD `ball-NaN` gaps, self-supervised jersey audit, and boundary kick-onset alignment) complements the tabular/sequence core cleanly (section 6.1).
 
 ## 2. Assets used and dropped
 
 | asset | use |
 |---|---|
-| tactical ATD (players, ball, team of each slot) | input to the external DFL model and physical ball-state cues |
+| tactical ATD (players, ball, team of each slot) | input to external DFL/Stage-2 model, physical cues, and Sprint 4 swap repair |
+| tactical video (`BAR-ATH_tactical.mp4`) + homography (`starter/load_homography.py`) | `YOLO26s` Stage-B domain adaptation (unsupervised `fr > 19000`), `ball-NaN` recovery (`24,276` frames), jersey swap audit, and `D -> Live` visual kick-onset check |
 | Smart Tagging | soft log-odds priors and restart/goal kick-off anchors (`src/smart_priors.py`) |
 | `games.py` half boundaries; FAQ statement that frames 110,808–113,741 are dead | graded range and one forced-dead stretch |
-| ATD speed column, homography, both videos, broadcast ATD | not used |
+| ATD speed column, broadcast video, broadcast ATD | not used (superseded by tactical video + metric `unproject`) |
 | public 5-minute ground truth | pipeline check only (section 6); nothing fitted to it |
 
 ## 3. Handling missing and noisy tracking
@@ -88,6 +88,7 @@ The pipeline has five stages:
 |---|---|---|---|
 | IDSSE / DFL open dataset (Bassek et al. 2025, Scientific Data; CC-BY 4.0; mirror `huggingface.co/datasets/pysport/idsse-data`) | 7 Bundesliga / 2. Bundesliga matches, season 2022/23, official 25 Hz positions | per-frame `BallStatus` and `BallPossession` in the position files, annotated by the league's data provider | **Stage-1 training** |
 | Metrica Sports sample data (`github.com/metrica-sports/sample-data`) | 3 anonymised matches, 25 Hz | human event logs, converted to frame labels deterministically (`src/metrica_io.py`) | **Stage-1 validation & Stage-2 Nested LOGO CV / training** |
+| Roboflow `football-tactical` v4 (`CC BY 4.0`, `alfonso-secretara-tcnica/football-tactical`) | Public tactical broadcast crops (6,262 train / 339 val / 173 test tiles after unstretching & cleaning) | `class 0 = ball` only (original public dataset annotators; no manual labels from competition match) | **Phase-2 `YOLO26s` ball detector (`Stage-A` base)** |
 
 Labels: `D` where `BallStatus = 0`, otherwise `H`/`A` from `BallPossession`. Nobody on this team
 labelled anything. **No label from the competition match was used**, public or otherwise, for
